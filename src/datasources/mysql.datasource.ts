@@ -14,11 +14,11 @@ import { Pagination } from '../helpers/Pagination'
 import {
 	DataSourceColumnType,
 	DataSourceCreateOneOptions,
+	DataSourceDefinition,
 	DataSourceDeleteOneOptions,
 	DataSourceFindManyOptions,
 	DataSourceFindOneOptions,
 	DataSourceFindTotalRecords,
-	DataSourceSchema,
 	DataSourceSchemaColumn,
 	DataSourceSchemaRelation,
 	DataSourceType,
@@ -106,9 +106,9 @@ export class MySQL {
 	 */
 
 	async uniqueCheck(options: DataSourceUniqueCheckOptions, x_request_id: string): Promise<IsUniqueResponse> {
-		for (const column of options.schema.columns) {
+		for (const column of options.definition.columns) {
 			if (column.unique_key) {
-				const command = `SELECT COUNT(*) as total FROM ${options.schema.table} WHERE ${column.field} = ?`
+				const command = `SELECT COUNT(*) as total FROM ${options.definition.table} WHERE ${column.field} = ?`
 				const result = await this.query({
 					sql: command,
 					values: [options.data[column.field]],
@@ -133,7 +133,7 @@ export class MySQL {
 	 * Get Table Schema
 	 */
 
-	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceSchema> {
+	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceDefinition> {
 		const columns_result = await this.query({
 			sql: `DESCRIBE ${options.table}`,
 			x_request_id: options.x_request_id,
@@ -179,6 +179,7 @@ export class MySQL {
 
 		return {
 			table: options.table,
+			schema: '?',
 			columns,
 			primary_key: columns.find(column => column.primary_key)?.field,
 			relations,
@@ -189,7 +190,7 @@ export class MySQL {
 	 * Create table from schema object
 	 */
 
-	async createTable(schema: DataSourceSchema, x_request_id?: string): Promise<boolean> {
+	async createTable(schema: DataSourceDefinition, x_request_id?: string): Promise<boolean> {
 		try {
 			const columns = schema.columns.map(column => {
 				let column_string = `\`${column.field}\` ${this.columnTypeToDataSource(column.type)}`
@@ -267,7 +268,7 @@ export class MySQL {
 	 */
 
 	async createOne(options: DataSourceCreateOneOptions, x_request_id?: string): Promise<FindOneResponseObject> {
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 		const values: any[] = []
 
 		options = this.pipeObjectToDataSource(options) as DataSourceCreateOneOptions
@@ -283,10 +284,10 @@ export class MySQL {
 
 		return await this.findOne(
 			{
-				schema: options.schema,
+				definition: options.definition,
 				where: [
 					{
-						column: options.schema.primary_key,
+						column: options.definition.primary_key,
 						operator: WhereOperator.equals,
 						value: result.insertId,
 					},
@@ -384,7 +385,7 @@ export class MySQL {
 	 */
 
 	async updateOne(options: DataSourceUpdateOneOptions, x_request_id: string): Promise<FindOneResponseObject> {
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 
 		options = this.pipeObjectToDataSource(options) as DataSourceUpdateOneOptions
 
@@ -395,16 +396,16 @@ export class MySQL {
 			.map(key => `${key} = ?`)
 			.join(', ')} `
 
-		command += `WHERE ${options.schema.primary_key} = ?`
+		command += `WHERE ${options.definition.primary_key} = ?`
 
 		await this.query({ sql: command, values, x_request_id })
 
 		return await this.findOne(
 			{
-				schema: options.schema,
+				definition: options.definition,
 				where: [
 					{
-						column: options.schema.primary_key,
+						column: options.definition.primary_key,
 						operator: WhereOperator.equals,
 						value: options.id,
 					},
@@ -423,7 +424,7 @@ export class MySQL {
 			const result = await this.updateOne(
 				{
 					id: options.id,
-					schema: options.schema,
+					definition: options.definition,
 					data: {
 						[options.softDelete]: new Date().toISOString().slice(0, 19).replace('T', ' '),
 					},
@@ -438,12 +439,12 @@ export class MySQL {
 			}
 		}
 
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 
 		const values = [options.id]
 		let command = `DELETE FROM ${table_name} `
 
-		command += `WHERE ${options.schema.primary_key} = ?`
+		command += `WHERE ${options.definition.primary_key} = ?`
 
 		const result = await this.query({ sql: command, values, x_request_id })
 
@@ -560,7 +561,7 @@ export class MySQL {
 	private pipeObjectToDataSource(
 		options: DataSourceCreateOneOptions | DataSourceUpdateOneOptions,
 	): DataSourceCreateOneOptions | DataSourceUpdateOneOptions {
-		for (const column of options.schema.columns) {
+		for (const column of options.definition.columns) {
 			if (!options.data[column.field]) {
 				continue
 			}
@@ -601,9 +602,9 @@ export class MySQL {
 			if (key.includes('.')) {
 				const [table, field] = key.split('.')
 				const relation = options.relations.find(r => r.table === table)
-				column = relation.schema.columns.find(c => c.field === field)
+				column = relation.definition.columns.find(c => c.field === field)
 			} else {
-				column = options.schema.columns.find(c => c.field === key)
+				column = options.definition.columns.find(c => c.field === key)
 			}
 
 			switch (column.type) {
@@ -627,7 +628,7 @@ export class MySQL {
 		options: DataSourceFindOneOptions | DataSourceFindManyOptions,
 		count: boolean = false,
 	): [string, string[]] {
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 		let values: any[] = []
 
 		let command
@@ -639,11 +640,11 @@ export class MySQL {
 
 			if (options.fields?.length) {
 				for (const f in options.fields) {
-					command += ` \`${options.schema.table}\`.\`${options.fields[f]}\` as \`${options.fields[f]}\`,`
+					command += ` \`${options.definition.table}\`.\`${options.fields[f]}\` as \`${options.fields[f]}\`,`
 				}
 				command = command.slice(0, -1)
 			} else {
-				command += ` \`${options.schema.table}\`.* `
+				command += ` \`${options.definition.table}\`.* `
 			}
 
 			if (options.relations?.length) {

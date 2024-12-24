@@ -26,6 +26,7 @@ import { MSSQL } from './datasources/mssql.datasource'
 import { MySQL } from './datasources/mysql.datasource'
 import { Postgres } from './datasources/postgres.datasource'
 import { Authentication } from './helpers/Authentication'
+import { Definition } from './helpers/Definition'
 import { Documentation } from './helpers/Documentation'
 import { Encryption } from './helpers/Encryption'
 import { Logger } from './helpers/Logger'
@@ -33,7 +34,6 @@ import { Pagination } from './helpers/Pagination'
 import { Query } from './helpers/Query'
 import { Response } from './helpers/Response'
 import { Roles } from './helpers/Roles'
-import { Schema } from './helpers/Schema'
 import { Webhook } from './helpers/Webhook'
 import { HostCheckMiddleware } from './middleware/HostCheck'
 import { RedisMockWithPubSub } from './modules/websocket/redis-mock-with-pub-sub'
@@ -91,7 +91,7 @@ function createPubSubOnlyRedisClient() {
 		Query,
 		Response,
 		Roles,
-		Schema,
+		Definition,
 		TasksService,
 		Webhook,
 		WebsocketGateway,
@@ -122,7 +122,7 @@ function createPubSubOnlyRedisClient() {
 		Query,
 		Response,
 		Roles,
-		Schema,
+		Definition,
 		Webhook,
 		WebsocketService,
 		WebsocketGateway,

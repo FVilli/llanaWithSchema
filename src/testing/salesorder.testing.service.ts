@@ -2,8 +2,8 @@ import { faker } from '@faker-js/faker'
 import { Injectable } from '@nestjs/common'
 
 import { FindOneResponseObject } from '../dtos/response.dto'
+import { Definition } from '../helpers/Definition'
 import { Query } from '../helpers/Query'
-import { Schema } from '../helpers/Schema'
 import { QueryPerform } from '../types/datasource.types'
 
 const table = 'SalesOrder'
@@ -12,7 +12,7 @@ const table = 'SalesOrder'
 export class SalesOrderTestingService {
 	constructor(
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 	) {}
 
 	mockOrder(): any {
@@ -33,19 +33,19 @@ export class SalesOrderTestingService {
 		}
 	}
 
-	async getSchema(): Promise<any> {
-		return await this.schema.getSchema({ table })
+	async getDef(item?: string): Promise<any> {
+		if (!item) item = table
+		return await this.definition.getDefinition(item, this.query.defaultSchema, 'testing')
 	}
-
 	async createOrder(order: { custId; employeeId; shipperId; orderId? }): Promise<any> {
-		const salesOrderTableSchema = await this.schema.getSchema({ table, x_request_id: 'testing' })
+		const definition = await this.getDef()
 
 		const ORDER = this.mockOrder()
 
 		return (await this.query.perform(
 			QueryPerform.CREATE,
 			{
-				schema: salesOrderTableSchema,
+				definition,
 				data: {
 					...ORDER,
 					...order,
@@ -56,11 +56,11 @@ export class SalesOrderTestingService {
 	}
 
 	async deleteOrder(id: any): Promise<void> {
-		const customerTableSchema = await this.schema.getSchema({ table })
+		const definition = await this.getDef()
 		await this.query.perform(
 			QueryPerform.DELETE,
 			{
-				schema: customerTableSchema,
+				definition,
 				id,
 			},
 			'testing',

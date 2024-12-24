@@ -8,7 +8,7 @@ import { CustomerTestingService } from './testing/customer.testing.service'
 import { AppModule } from './app.module'
 import { AuthTestingService } from './testing/auth.testing.service'
 import { SalesOrderTestingService } from './testing/salesorder.testing.service'
-import { DataSourceSchema } from './types/datasource.types'
+import { DataSourceDefinition } from './types/datasource.types'
 import { EmployeeTestingService } from './testing/employee.testing.service'
 import { ShipperTestingService } from './testing/shipper.testing.service'
 import { TIMEOUT } from './testing/testing.const'
@@ -35,10 +35,10 @@ describe('App > Controller > Get', () => {
 
 	let salesOrderTestingService: SalesOrderTestingService
 
-	let customerSchema: DataSourceSchema
-	let employeeSchema: DataSourceSchema
-	let shipperSchema: DataSourceSchema
-	let salesOrderSchema: DataSourceSchema
+	let customerSchema: DataSourceDefinition
+	let employeeSchema: DataSourceDefinition
+	let shipperSchema: DataSourceDefinition
+	let salesOrderSchema: DataSourceDefinition
 
 	let customer: any
 	let employee: any
@@ -91,10 +91,10 @@ describe('App > Controller > Get', () => {
 
 		salesOrderTestingService = app.get<SalesOrderTestingService>(SalesOrderTestingService)
 
-		customerSchema = await customerTestingService.getSchema()
-		employeeSchema = await employeeTestingService.getSchema()
-		shipperSchema = await shipperTestingService.getSchema()
-		salesOrderSchema = await salesOrderTestingService.getSchema()
+		customerSchema = await customerTestingService.getDef()
+		employeeSchema = await employeeTestingService.getDef()
+		shipperSchema = await shipperTestingService.getDef()
+		salesOrderSchema = await salesOrderTestingService.getDef()
 
 		customer = await customerTestingService.createCustomer({})
 		employee = await employeeTestingService.createEmployee({})

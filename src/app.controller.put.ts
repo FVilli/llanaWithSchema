@@ -5,14 +5,20 @@ import { HeaderParams } from './dtos/requests.dto'
 import { FindOneResponseObject, IsUniqueResponse, UpdateManyResponseObject } from './dtos/response.dto'
 import { Authentication } from './helpers/Authentication'
 import { UrlToTable } from './helpers/Database'
+import { Definition } from './helpers/Definition'
 import { Query } from './helpers/Query'
 import { Response } from './helpers/Response'
 import { Roles } from './helpers/Roles'
-import { Schema } from './helpers/Schema'
 import { Webhook } from './helpers/Webhook'
 import { WebsocketService } from './modules/websocket/websocket.service'
 import { AuthTablePermissionFailResponse, AuthTablePermissionSuccessResponse } from './types/auth.types'
-import { DataSourceSchema, DataSourceWhere, PublishType, QueryPerform, WhereOperator } from './types/datasource.types'
+import {
+	DataSourceDefinition,
+	DataSourceWhere,
+	PublishType,
+	QueryPerform,
+	WhereOperator,
+} from './types/datasource.types'
 import { RolePermission } from './types/roles.types'
 
 @Controller()
@@ -22,7 +28,7 @@ export class PutController {
 		private readonly query: Query,
 		private readonly response: Response,
 		private readonly roles: Roles,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 		private readonly websocket: WebsocketService,
 		private readonly webhooks: Webhook,
 	) {}
@@ -36,22 +42,21 @@ export class PutController {
 		@Param('id') id: string,
 	): Promise<FindOneResponseObject> {
 		const x_request_id = headers['x-request-id']
-		let table_name = UrlToTable(req.originalUrl, 1)
+		let { schema, tableOrView } = this.query.urlParser(UrlToTable(req.originalUrl, 1))
 
-		if (table_name === 'webhook') {
-			table_name = LLANA_WEBHOOK_TABLE
-		}
+		if (tableOrView === 'webhook') tableOrView = LLANA_WEBHOOK_TABLE
 
-		let schema: DataSourceSchema
+		let definition: DataSourceDefinition
 
 		try {
-			schema = await this.schema.getSchema({ table: table_name, x_request_id })
+			definition = await this.definition.getDefinition(tableOrView, schema, x_request_id)
 		} catch (e) {
 			return res.status(404).send(this.response.text(e.message))
 		}
 
 		const auth = await this.authentication.auth({
-			table: table_name,
+			table: tableOrView,
+			schema,
 			x_request_id,
 			access: RolePermission.WRITE,
 			headers: req.headers,
@@ -69,7 +74,7 @@ export class PutController {
 		if (auth.user_identifier) {
 			const permission = await this.roles.tablePermission({
 				identifier: auth.user_identifier,
-				table: table_name,
+				table: tableOrView,
 				access: RolePermission.WRITE,
 				x_request_id,
 			})
@@ -84,19 +89,19 @@ export class PutController {
 		}
 
 		//validate input data
-		const validate = await this.schema.validateData(schema, body)
+		const validate = await this.definition.validateData(definition, body)
 		if (!validate.valid) {
 			return res.status(400).send(this.response.text(validate.message))
 		}
 
 		//validate :id field
-		const primary_key = this.schema.getPrimaryKey(schema)
+		const primary_key = this.definition.getPrimaryKey(definition)
 
 		if (!primary_key) {
-			return res.status(400).send(this.response.text(`No primary key found for table ${table_name}`))
+			return res.status(400).send(this.response.text(`No primary key found for table ${tableOrView}`))
 		}
 
-		const validateKey = await this.schema.validateData(schema, { [primary_key]: id })
+		const validateKey = await this.definition.validateData(definition, { [primary_key]: id })
 		if (!validateKey.valid) {
 			return res.status(400).send(this.response.text(validateKey.message))
 		}
@@ -105,7 +110,7 @@ export class PutController {
 		const uniqueValidation = (await this.query.perform(
 			QueryPerform.UNIQUE,
 			{
-				schema,
+				definition: definition,
 				data: body,
 				id: id,
 			},
@@ -132,7 +137,7 @@ export class PutController {
 		const record = (await this.query.perform(
 			QueryPerform.FIND_ONE,
 			{
-				schema,
+				definition: definition,
 				where,
 			},
 			x_request_id,
@@ -143,10 +148,11 @@ export class PutController {
 		}
 
 		try {
-			if (table_name === LLANA_WEBHOOK_TABLE) {
+			if (tableOrView === LLANA_WEBHOOK_TABLE) {
 				//perform auth on webhook table
 				const auth = await this.authentication.auth({
 					table: record.table,
+					schema,
 					x_request_id,
 					access: RolePermission.READ,
 					headers: req.headers,
@@ -172,7 +178,7 @@ export class PutController {
 				}
 				const result = await this.query.perform(
 					QueryPerform.UPDATE,
-					{ id, schema, data: validate.instance },
+					{ id, definition: definition, data: validate.instance },
 					x_request_id,
 				)
 				return res.status(200).send(result)
@@ -180,11 +186,16 @@ export class PutController {
 
 			const result = await this.query.perform(
 				QueryPerform.UPDATE,
-				{ id, schema, data: validate.instance },
+				{ id, definition: definition, data: validate.instance },
 				x_request_id,
 			)
-			await this.websocket.publish(schema, PublishType.UPDATE, result[schema.primary_key])
-			await this.webhooks.publish(schema, PublishType.UPDATE, result[schema.primary_key], auth.user_identifier)
+			await this.websocket.publish(definition, PublishType.UPDATE, result[definition.primary_key])
+			await this.webhooks.publish(
+				definition,
+				PublishType.UPDATE,
+				result[definition.primary_key],
+				auth.user_identifier,
+			)
 			return res.status(200).send(result)
 		} catch (e) {
 			return res.status(400).send(this.response.text(e.message))
@@ -210,22 +221,21 @@ export class PutController {
 		@Headers() headers: HeaderParams,
 	): Promise<UpdateManyResponseObject> {
 		const x_request_id = headers['x-request-id']
-		let table_name = UrlToTable(req.originalUrl, 1)
+		let { schema, tableOrView } = this.query.urlParser(UrlToTable(req.originalUrl, 1))
 
-		if (table_name === 'webhook') {
-			table_name = LLANA_WEBHOOK_TABLE
-		}
+		if (tableOrView === 'webhook') tableOrView = LLANA_WEBHOOK_TABLE
 
-		let schema: DataSourceSchema
+		let definition: DataSourceDefinition
 
 		try {
-			schema = await this.schema.getSchema({ table: table_name, x_request_id })
+			definition = await this.definition.getDefinition(tableOrView, schema, x_request_id)
 		} catch (e) {
 			return res.status(404).send(this.response.text(e.message))
 		}
 
 		const auth = await this.authentication.auth({
-			table: table_name,
+			table: tableOrView,
+			schema,
 			x_request_id,
 			access: RolePermission.WRITE,
 			headers: req.headers,
@@ -243,7 +253,7 @@ export class PutController {
 		if (auth.user_identifier) {
 			const permission = await this.roles.tablePermission({
 				identifier: auth.user_identifier,
-				table: table_name,
+				table: tableOrView,
 				access: RolePermission.WRITE,
 				x_request_id,
 			})
@@ -258,10 +268,10 @@ export class PutController {
 		}
 
 		//validate :id field
-		const primary_key = this.schema.getPrimaryKey(schema)
+		const primary_key = this.definition.getPrimaryKey(definition)
 
 		if (!primary_key) {
-			return res.status(400).send(this.response.text(`No primary key found for table ${table_name}`))
+			return res.status(400).send(this.response.text(`No primary key found for table ${tableOrView}`))
 		}
 
 		if (body instanceof Array) {
@@ -273,7 +283,7 @@ export class PutController {
 
 			for (const item of body) {
 				//validate input data
-				const validate = await this.schema.validateData(schema, item)
+				const validate = await this.definition.validateData(definition, item)
 				if (!validate.valid) {
 					errored++
 					errors.push({
@@ -283,7 +293,7 @@ export class PutController {
 					continue
 				}
 
-				const validateKey = await this.schema.validateData(schema, { [primary_key]: item[primary_key] })
+				const validateKey = await this.definition.validateData(definition, { [primary_key]: item[primary_key] })
 				if (!validateKey.valid) {
 					errored++
 					errors.push({
@@ -297,7 +307,7 @@ export class PutController {
 				const uniqueValidation = (await this.query.perform(
 					QueryPerform.UNIQUE,
 					{
-						schema,
+						definition: definition,
 						data: item,
 						id: item[primary_key],
 					},
@@ -330,7 +340,7 @@ export class PutController {
 				const record = (await this.query.perform(
 					QueryPerform.FIND_ONE,
 					{
-						schema,
+						definition: definition,
 						where,
 					},
 					x_request_id,
@@ -346,10 +356,11 @@ export class PutController {
 				}
 
 				try {
-					if (table_name === LLANA_WEBHOOK_TABLE) {
+					if (tableOrView === LLANA_WEBHOOK_TABLE) {
 						//perform auth on webhook table
 						const auth = await this.authentication.auth({
 							table: record.table,
+							schema: record.schema || this.query.defaultSchema,
 							x_request_id,
 							access: RolePermission.READ,
 							headers: req.headers,
@@ -377,14 +388,14 @@ export class PutController {
 
 					const result = (await this.query.perform(
 						QueryPerform.UPDATE,
-						{ id: item[primary_key], schema, data: validate.instance },
+						{ id: item[primary_key], definition: definition, data: validate.instance },
 						x_request_id,
 					)) as FindOneResponseObject
-					await this.websocket.publish(schema, PublishType.UPDATE, result[schema.primary_key])
+					await this.websocket.publish(definition, PublishType.UPDATE, result[definition.primary_key])
 					await this.webhooks.publish(
-						schema,
+						definition,
 						PublishType.UPDATE,
-						result[schema.primary_key],
+						result[definition.primary_key],
 						auth.user_identifier,
 					)
 					successful++

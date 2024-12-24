@@ -1,6 +1,6 @@
 import { Inject, Injectable, OnApplicationShutdown } from '@nestjs/common'
 import Redis from 'ioredis'
-import { DataSourceSchema, PublishType } from 'src/types/datasource.types'
+import { DataSourceDefinition, PublishType } from 'src/types/datasource.types'
 
 import { Logger } from '../../helpers/Logger'
 import { REDIS_PUB_CLIENT_TOKEN, WebsocketRedisEvent, WEBSOCKETS_REDIS_CHANNEL } from './websocket.constants'
@@ -16,7 +16,7 @@ export class WebsocketService implements OnApplicationShutdown {
 		this.redisPubClient.disconnect()
 	}
 
-	public async publish(schema: DataSourceSchema, type: PublishType, id: number | string) {
+	public async publish(schema: DataSourceDefinition, type: PublishType, id: number | string) {
 		this.logger.debug(`[WebsocketService] Publishing ${schema.table} ${type} for #${id}`)
 		if (this.redisPubClient.status !== 'ready') {
 			throw new Error('Redis client not ready')

@@ -1,5 +1,10 @@
 import { IsArray, IsBoolean, IsNumber, IsObject, IsOptional, IsString } from 'class-validator'
 
+export interface Item {
+	name: string
+	schema: string
+}
+
 export class PaginationPage {
 	@IsString()
 	current: string
@@ -78,7 +83,16 @@ export class DeleteResponseObject {
 
 export class ListTablesResponseObject {
 	@IsArray()
-	tables: string[]
+	tables: Item[]
+
+	@IsOptional()
+	@IsString()
+	_x_request_id?: string
+}
+
+export class ListViewsResponseObject {
+	@IsArray()
+	views: Item[]
 
 	@IsOptional()
 	@IsString()

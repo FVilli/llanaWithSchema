@@ -6,16 +6,16 @@ import { FindManyQueryParams, HeaderParams } from './dtos/requests.dto'
 import { FindManyResponseObject, FindOneResponseObject, ListTablesResponseObject } from './dtos/response.dto'
 import { Authentication } from './helpers/Authentication'
 import { UrlToTable } from './helpers/Database'
+import { Definition } from './helpers/Definition'
 import { Pagination } from './helpers/Pagination'
 import { Query } from './helpers/Query'
 import { Response } from './helpers/Response'
 import { Roles } from './helpers/Roles'
-import { Schema } from './helpers/Schema'
 import { AuthTablePermissionFailResponse, AuthTablePermissionSuccessResponse } from './types/auth.types'
 import {
+	DataSourceDefinition,
 	DataSourceFindManyOptions,
 	DataSourceFindOneOptions,
-	DataSourceSchema,
 	QueryPerform,
 	WhereOperator,
 } from './types/datasource.types'
@@ -30,15 +30,16 @@ export class GetController {
 		private readonly query: Query,
 		private readonly response: Response,
 		private readonly roles: Roles,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 	) {}
 
 	@Get('/tables')
-	async listTables(@Req() req, @Res() res, @Headers() headers: HeaderParams): Promise<DataSourceSchema> {
+	async listTables(@Req() req, @Res() res, @Headers() headers: HeaderParams): Promise<DataSourceDefinition> {
 		const x_request_id = headers['x-request-id']
 
 		const auth = await this.authentication.auth({
 			table: '',
+			schema: '',
 			x_request_id,
 			access: RolePermission.READ,
 			headers: req.headers,
@@ -52,23 +53,48 @@ export class GetController {
 
 		return res.status(200).send(await this.query.perform(QueryPerform.LIST_TABLES, undefined, x_request_id))
 	}
-	
-	@Get('*/schema')
-	async getSchema(@Req() req, @Res() res, @Headers() headers: HeaderParams): Promise<ListTablesResponseObject> {
+
+	@Get('/views')
+	async listViews(@Req() req, @Res() res, @Headers() headers: HeaderParams): Promise<DataSourceDefinition> {
 		const x_request_id = headers['x-request-id']
 
-		const table_name = UrlToTable(req.originalUrl, 1)
-
-		let schema: DataSourceSchema
-
-		try {
-			schema = await this.schema.getSchema({ table: table_name, x_request_id })
-		} catch (e) {
-			return res.status(404).send(this.response.text(e.message))
+		const auth = await this.authentication.auth({
+			table: '',
+			schema: '',
+			x_request_id,
+			access: RolePermission.READ,
+			headers: req.headers,
+			body: req.body,
+			query: req.query,
+			skip_table_checks: true,
+		})
+		if (!auth.valid) {
+			return res.status(401).send(this.response.text(auth.message))
 		}
 
+		return res.status(200).send(await this.query.perform(QueryPerform.LIST_VIEWS, undefined, x_request_id))
+	}
+
+	@Get('definition/:tableOrView')
+	async getSchema(
+		@Req() req,
+		@Res() res,
+		@Headers() headers: HeaderParams,
+		@Param('tableOrView') tableOrView: string,
+		@QueryParams('schema') paramSchema: string,
+	): Promise<ListTablesResponseObject> {
+		const x_request_id = headers['x-request-id']
+		const schema = (paramSchema || '').trim() == '' ? this.query.defaultSchema : paramSchema.trim()
+		console.log(`GET DEFINITION OF [${schema}.${tableOrView}]`)
+		const definition = await this.definition.getDefinition(tableOrView, schema, x_request_id)
+
+		if (!definition) return res.status(404).send(this.response.text('Unknown item'))
+
+		console.log(definition)
+
 		const auth = await this.authentication.auth({
-			table: table_name,
+			table: tableOrView,
+			schema,
 			x_request_id,
 			access: RolePermission.READ,
 			headers: req.headers,
@@ -83,7 +109,7 @@ export class GetController {
 		if (auth.user_identifier) {
 			const permission = await this.roles.tablePermission({
 				identifier: auth.user_identifier,
-				table: table_name,
+				table: tableOrView,
 				access: RolePermission.READ,
 				x_request_id,
 			})
@@ -93,31 +119,30 @@ export class GetController {
 			}
 		}
 
-		return res.status(200).send(schema)
+		return res.status(200).send(definition)
 	}
 
-	@Get('*/:id')
+	@Get(':tableOrView/:id')
 	async getById(
 		@Req() req,
 		@Res() res,
 		@Headers() headers: HeaderParams,
+		@Param('tableOrView') tableOrView: string,
 		@Param('id') id: string,
+		@QueryParams('schema') paramSchema: string,
 		@QueryParams('fields', new ParseArrayPipe({ items: String, separator: ',', optional: true }))
 		queryFields?: string[],
 		@QueryParams('relations', new ParseArrayPipe({ items: String, separator: ',', optional: true }))
 		queryRelations?: string[],
 	): Promise<FindOneResponseObject> {
 		const x_request_id = headers['x-request-id']
-		let table_name = UrlToTable(req.originalUrl, 1)
-
-		if (table_name === 'webhook') {
-			table_name = LLANA_WEBHOOK_TABLE
-		}
+		const schema = (paramSchema || '').trim() == '' ? this.query.defaultSchema : paramSchema.trim()
+		if (tableOrView === 'webhook') tableOrView = LLANA_WEBHOOK_TABLE
 
 		let primary_key
 
 		const options: DataSourceFindOneOptions = {
-			schema: null,
+			definition: null,
 			fields: [],
 			where: [],
 			relations: [],
@@ -126,13 +151,14 @@ export class GetController {
 		const postQueryRelations = []
 
 		try {
-			options.schema = await this.schema.getSchema({ table: table_name, x_request_id })
+			options.definition = await this.definition.getDefinition(tableOrView, schema, x_request_id)
 		} catch (e) {
 			return res.status(404).send(this.response.text(e.message))
 		}
 
 		const auth = await this.authentication.auth({
-			table: table_name,
+			table: tableOrView,
+			schema,
 			x_request_id,
 			access: RolePermission.READ,
 			headers: req.headers,
@@ -148,7 +174,7 @@ export class GetController {
 			if (auth.user_identifier) {
 				let permission = await this.roles.tablePermission({
 					identifier: auth.user_identifier,
-					table: table_name,
+					table: tableOrView,
 					access: RolePermission.READ,
 					x_request_id,
 				})
@@ -164,9 +190,9 @@ export class GetController {
 
 					if (permission.restriction.column.includes('.')) {
 						options.relations.concat(
-							await this.schema.convertDeepWhere({
+							await this.definition.convertDeepWhere({
 								where: permission.restriction,
-								schema: options.schema,
+								definition: options.definition,
 								x_request_id,
 							}),
 						)
@@ -177,20 +203,20 @@ export class GetController {
 			}
 
 			//validate :id field
-			primary_key = this.schema.getPrimaryKey(options.schema)
+			primary_key = this.definition.getPrimaryKey(options.definition)
 
 			if (!primary_key) {
-				return res.status(400).send(this.response.text(`No primary key found for table ${table_name}`))
+				return res.status(400).send(this.response.text(`No primary key found for table ${tableOrView}`))
 			}
 
-			const validateKey = await this.schema.validateData(options.schema, { [primary_key]: id })
+			const validateKey = await this.definition.validateData(options.definition, { [primary_key]: id })
 			if (!validateKey.valid) {
 				return res.status(400).send(this.response.text(validateKey.message))
 			}
 
 			if (queryFields?.length) {
-				const { valid, message, fields, relations } = await this.schema.validateFields({
-					schema: options.schema,
+				const { valid, message, fields, relations } = await this.definition.validateFields({
+					schema: options.definition,
 					fields: queryFields,
 					x_request_id,
 				})
@@ -212,8 +238,8 @@ export class GetController {
 			}
 
 			if (queryRelations?.length) {
-				const { valid, message, relations } = await this.schema.validateRelations({
-					schema: options.schema,
+				const { valid, message, relations } = await this.definition.validateRelations({
+					definition: options.definition,
 					relation_query: queryRelations,
 					existing_relations: options.relations,
 					x_request_id,
@@ -282,14 +308,12 @@ export class GetController {
 		querySort?: string[],
 	): Promise<FindManyResponseObject> {
 		const x_request_id = headers['x-request-id']
-		let table_name = UrlToTable(req.originalUrl, 1)
+		let { schema, tableOrView } = this.query.urlParser(UrlToTable(req.originalUrl, 1))
 
-		if (table_name === 'webhook') {
-			table_name = LLANA_WEBHOOK_TABLE
-		}
+		if (tableOrView === 'webhook') tableOrView = LLANA_WEBHOOK_TABLE
 
 		const options: DataSourceFindManyOptions = {
-			schema: null,
+			definition: null,
 			fields: [],
 			where: [],
 			relations: [],
@@ -299,13 +323,14 @@ export class GetController {
 		const postQueryRelations = []
 
 		try {
-			options.schema = await this.schema.getSchema({ table: table_name, x_request_id })
+			options.definition = await this.definition.getDefinition(tableOrView, schema, x_request_id)
 		} catch (e) {
 			return res.status(404).send(this.response.text(e.message))
 		}
 
 		const auth = await this.authentication.auth({
-			table: table_name,
+			table: tableOrView,
+			schema,
 			x_request_id,
 			access: RolePermission.READ,
 			headers: req.headers,
@@ -321,7 +346,7 @@ export class GetController {
 			if (auth.user_identifier) {
 				let permission = await this.roles.tablePermission({
 					identifier: auth.user_identifier,
-					table: table_name,
+					table: tableOrView,
 					access: RolePermission.READ,
 					x_request_id,
 				})
@@ -337,9 +362,9 @@ export class GetController {
 				if (permission.valid && permission.restriction) {
 					if (permission.restriction.column.includes('.')) {
 						options.relations = options.relations.concat(
-							await this.schema.convertDeepWhere({
+							await this.definition.convertDeepWhere({
 								where: permission.restriction,
-								schema: options.schema,
+								definition: options.definition,
 								x_request_id,
 							}),
 						)
@@ -354,8 +379,8 @@ export class GetController {
 			options.offset = offset
 
 			if (queryFields?.length) {
-				const { valid, message, fields, relations } = await this.schema.validateFields({
-					schema: options.schema,
+				const { valid, message, fields, relations } = await this.definition.validateFields({
+					schema: options.definition,
 					fields: queryFields,
 					x_request_id,
 				})
@@ -377,8 +402,8 @@ export class GetController {
 			}
 
 			if (queryRelations?.length) {
-				const { valid, message, relations } = await this.schema.validateRelations({
-					schema: options.schema,
+				const { valid, message, relations } = await this.definition.validateRelations({
+					definition: options.definition,
 					relation_query: queryRelations,
 					existing_relations: options.relations,
 					x_request_id,
@@ -396,7 +421,10 @@ export class GetController {
 				}
 			}
 
-			const validateWhere = await this.schema.validateWhereParams({ schema: options.schema, params: queryParams })
+			const validateWhere = await this.definition.validateWhereParams({
+				schema: options.definition,
+				params: queryParams,
+			})
 			if (!validateWhere.valid) {
 				return res.status(400).send(this.response.text(validateWhere.message))
 			}
@@ -407,7 +435,7 @@ export class GetController {
 
 			let validateSort
 			if (querySort?.length) {
-				validateSort = this.schema.validateSort({ schema: options.schema, sort: querySort })
+				validateSort = this.definition.validateSort({ schema: options.definition, sort: querySort })
 				if (!validateSort.valid) {
 					return res.status(400).send(this.response.text(validateSort.message))
 				}

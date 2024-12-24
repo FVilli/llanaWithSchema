@@ -14,11 +14,11 @@ import { Pagination } from '../helpers/Pagination'
 import {
 	DataSourceColumnType,
 	DataSourceCreateOneOptions,
+	DataSourceDefinition,
 	DataSourceDeleteOneOptions,
 	DataSourceFindManyOptions,
 	DataSourceFindOneOptions,
 	DataSourceFindTotalRecords,
-	DataSourceSchema,
 	DataSourceSchemaColumn,
 	DataSourceSchemaRelation,
 	DataSourceType,
@@ -134,7 +134,7 @@ export class MSSQL {
 	 * @param table_name
 	 */
 
-	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceSchema> {
+	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceDefinition> {
 		//get schema for MSSQL database
 
 		const identity_fields = `select COLUMN_NAME, TABLE_NAME from INFORMATION_SCHEMA.COLUMNS where COLUMNPROPERTY(object_id(TABLE_SCHEMA+'.'+TABLE_NAME), COLUMN_NAME, 'IsIdentity') = 1 AND TABLE_NAME = 'Customer' order by TABLE_NAME `
@@ -226,6 +226,7 @@ export class MSSQL {
 		for (const r of relation_result) {
 			const relation: DataSourceSchemaRelation = {
 				table: r.table,
+				schema: '?',
 				column: r.column,
 				org_table: r.org_table,
 				org_column: r.org_column,
@@ -235,6 +236,7 @@ export class MSSQL {
 
 			const relation_back: DataSourceSchemaRelation = {
 				table: r.org_table,
+				schema: '?',
 				column: r.org_column,
 				org_table: r.table,
 				org_column: r.column,
@@ -245,6 +247,7 @@ export class MSSQL {
 
 		return {
 			table: options.table,
+			schema: '?',
 			columns,
 			primary_key: columns.find(column => column.primary_key)?.field,
 			relations,
@@ -256,7 +259,7 @@ export class MSSQL {
 	 */
 
 	async createOne(options: DataSourceCreateOneOptions, x_request_id?: string): Promise<FindOneResponseObject> {
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 		const values: any[] = []
 
 		options = this.pipeObjectToMSSQL(options) as DataSourceCreateOneOptions
@@ -285,7 +288,7 @@ export class MSSQL {
 		let valuesString = ''
 
 		for (const c in columns) {
-			const schema_col = options.schema.columns.find(col => col.field === columns[c])
+			const schema_col = options.definition.columns.find(col => col.field === columns[c])
 
 			if (schema_col?.extra?.convert) {
 				valuesString += `CAST('?' AS ${schema_col.extra.convert}), `
@@ -308,10 +311,10 @@ export class MSSQL {
 
 		return await this.findOne(
 			{
-				schema: options.schema,
+				definition: options.definition,
 				where: [
 					{
-						column: options.schema.primary_key,
+						column: options.definition.primary_key,
 						operator: WhereOperator.equals,
 						value: result.insertId,
 					},
@@ -342,17 +345,17 @@ export class MSSQL {
 
 	async findMany(options: DataSourceFindManyOptions, x_request_id: string): Promise<FindManyResponseObject> {
 		if (!options.sort?.length) {
-			if (options.schema.primary_key) {
+			if (options.definition.primary_key) {
 				options.sort = [
 					{
-						column: options.schema.primary_key,
+						column: options.definition.primary_key,
 						operator: 'ASC',
 					},
 				]
 			} else {
 				options.sort = [
 					{
-						column: options.schema.columns[0].field,
+						column: options.definition.columns[0].field,
 						operator: 'ASC',
 					},
 				]
@@ -412,10 +415,10 @@ export class MSSQL {
 	 */
 
 	async updateOne(options: DataSourceUpdateOneOptions, x_request_id: string): Promise<FindOneResponseObject> {
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 
-		if (options.data[options.schema.primary_key]) {
-			delete options.data[options.schema.primary_key]
+		if (options.data[options.definition.primary_key]) {
+			delete options.data[options.definition.primary_key]
 		}
 
 		const values = [...Object.values(options.data), options.id.toString()]
@@ -424,7 +427,7 @@ export class MSSQL {
 		options = this.pipeObjectToMSSQL(options) as DataSourceUpdateOneOptions
 
 		for (const key of Object.keys(options.data)) {
-			const schema_col = options.schema.columns.find(col => col.field === key)
+			const schema_col = options.definition.columns.find(col => col.field === key)
 
 			if (schema_col?.extra?.convert) {
 				command += `${key} = CAST('?' AS ${schema_col.extra.convert}), `
@@ -435,7 +438,7 @@ export class MSSQL {
 
 		command = command.slice(0, -2)
 
-		command += `WHERE ${options.schema.primary_key} = ?`
+		command += `WHERE ${options.definition.primary_key} = ?`
 
 		if (values.length) {
 			for (const v in values) {
@@ -449,10 +452,10 @@ export class MSSQL {
 
 		return await this.findOne(
 			{
-				schema: options.schema,
+				definition: options.definition,
 				where: [
 					{
-						column: options.schema.primary_key,
+						column: options.definition.primary_key,
 						operator: WhereOperator.equals,
 						value: options.id,
 					},
@@ -471,7 +474,7 @@ export class MSSQL {
 			const result = await this.updateOne(
 				{
 					id: options.id,
-					schema: options.schema,
+					definition: options.definition,
 					data: {
 						[options.softDelete]: new Date().toISOString().slice(0, 19).replace('T', ' '),
 					},
@@ -486,12 +489,12 @@ export class MSSQL {
 			}
 		}
 
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 
 		const values = [options.id]
 		let command = `DELETE FROM ${this.reserveWordFix(table_name)} `
 
-		command += `WHERE ${options.schema.primary_key} = ?`
+		command += `WHERE ${options.definition.primary_key} = ?`
 
 		const result = await this.performQuery({ sql: command, values, x_request_id })
 
@@ -501,9 +504,9 @@ export class MSSQL {
 	}
 
 	async uniqueCheck(options: DataSourceUniqueCheckOptions, x_request_id: string): Promise<IsUniqueResponse> {
-		for (const column of options.schema.columns) {
+		for (const column of options.definition.columns) {
 			if (column.unique_key) {
-				const command = `SELECT COUNT(*) as total FROM ${this.reserveWordFix(options.schema.table)} WHERE ${column.field} = ?`
+				const command = `SELECT COUNT(*) as total FROM ${this.reserveWordFix(options.definition.table)} WHERE ${column.field} = ?`
 				const result = await this.performQuery({
 					sql: command,
 					values: [options.data[column.field]],
@@ -528,7 +531,7 @@ export class MSSQL {
 	 * Create table from schema object
 	 */
 
-	async createTable(schema: DataSourceSchema, x_request_id?: string): Promise<boolean> {
+	async createTable(schema: DataSourceDefinition, x_request_id?: string): Promise<boolean> {
 		try {
 			const columns = schema.columns.map(column => {
 				let column_string = `${this.reserveWordFix(column.field)} ${this.fieldMapperReverse(column.type)}`
@@ -587,7 +590,7 @@ export class MSSQL {
 		options: DataSourceFindOneOptions | DataSourceFindManyOptions,
 		count: boolean = false,
 	): [string, string[]] {
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 		let values: any[] = []
 
 		let command
@@ -599,11 +602,11 @@ export class MSSQL {
 
 			if (options.fields?.length) {
 				for (const f in options.fields) {
-					command += ` ${this.reserveWordFix(options.schema.table)}.${options.fields[f]} as ${options.fields[f]},`
+					command += ` ${this.reserveWordFix(options.definition.table)}.${options.fields[f]} as ${options.fields[f]},`
 				}
 				command = command.slice(0, -1)
 			} else {
-				command += ` ${this.reserveWordFix(options.schema.table)}.* `
+				command += ` ${this.reserveWordFix(options.definition.table)}.* `
 			}
 
 			if (options.relations?.length) {
@@ -769,7 +772,7 @@ export class MSSQL {
 	private pipeObjectToMSSQL(
 		options: DataSourceCreateOneOptions | DataSourceUpdateOneOptions,
 	): DataSourceCreateOneOptions | DataSourceUpdateOneOptions {
-		for (const column of options.schema.columns) {
+		for (const column of options.definition.columns) {
 			if (!options.data[column.field]) {
 				continue
 			}
@@ -810,9 +813,9 @@ export class MSSQL {
 			if (key.includes('.')) {
 				const [table, field] = key.split('.')
 				const relation = options.relations.find(r => r.table === table)
-				data[key] = this.formatField(relation.schema.columns.find(c => c.field === field).type, data[key])
+				data[key] = this.formatField(relation.definition.columns.find(c => c.field === field).type, data[key])
 			} else {
-				const column = options.schema.columns.find(c => c.field === key)
+				const column = options.definition.columns.find(c => c.field === key)
 				data[key] = this.formatField(column.type, data[key])
 			}
 		}
@@ -847,7 +850,7 @@ export class MSSQL {
 
 	private isIdentity(options: DataSourceCreateOneOptions, columns: string[]): boolean {
 		let has_identity = false
-		const identity = options.schema.columns.filter(c => c.extra?.is_identity)
+		const identity = options.definition.columns.filter(c => c.extra?.is_identity)
 
 		for (const c in columns) {
 			columns[c] = this.reserveWordFix(columns[c])

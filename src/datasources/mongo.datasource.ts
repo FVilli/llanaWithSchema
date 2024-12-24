@@ -14,11 +14,11 @@ import { Pagination } from '../helpers/Pagination'
 import {
 	DataSourceColumnType,
 	DataSourceCreateOneOptions,
+	DataSourceDefinition,
 	DataSourceDeleteOneOptions,
 	DataSourceFindManyOptions,
 	DataSourceFindOneOptions,
 	DataSourceFindTotalRecords,
-	DataSourceSchema,
 	DataSourceSchemaColumn,
 	DataSourceSchemaRelation,
 	DataSourceType,
@@ -113,7 +113,7 @@ export class Mongo {
 	 * @param table_name
 	 */
 
-	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceSchema> {
+	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceDefinition> {
 		const mongo = await this.createConnection(options.table)
 
 		try {
@@ -154,6 +154,7 @@ export class Mongo {
 					if (record) {
 						relations.push({
 							table: column.field,
+							schema: '?',
 							column: '_id',
 							org_table: options.table,
 							org_column: column.field,
@@ -180,6 +181,7 @@ export class Mongo {
 			for (const relation of relations_forward) {
 				relations.push({
 					table: relation.table,
+					schema: '?',
 					column: relation.column,
 					org_table: relation.org_table,
 					org_column: relation.org_column,
@@ -192,14 +194,15 @@ export class Mongo {
 
 			mongo.connection.close()
 
-			const schema = {
+			const definition = {
 				table: options.table,
+				schema: '?',
 				columns,
 				primary_key: columns.find(column => column.primary_key)?.field,
 				relations,
 			}
 
-			return schema
+			return definition
 		} catch (e) {
 			mongo.connection.close()
 			this.logger.warn(`[${DATABASE_TYPE}] Error getting schema - ${e.message}`)
@@ -213,11 +216,11 @@ export class Mongo {
 
 	async createOne(options: DataSourceCreateOneOptions, x_request_id?: string): Promise<FindOneResponseObject> {
 		this.logger.debug(
-			`[${DATABASE_TYPE}] Create Record on for collection ${options.schema.table}: ${JSON.stringify(options.data)}`,
+			`[${DATABASE_TYPE}] Create Record on for collection ${options.definition.table}: ${JSON.stringify(options.data)}`,
 			x_request_id,
 		)
 
-		const mongo = await this.createConnection(options.schema.table)
+		const mongo = await this.createConnection(options.definition.table)
 
 		options = this.pipeObjectToMongo(options) as DataSourceUpdateOneOptions
 
@@ -227,7 +230,7 @@ export class Mongo {
 			mongo.connection.close()
 			return await this.findOne(
 				{
-					schema: options.schema,
+					definition: options.definition,
 					where: [{ column: '_id', operator: WhereOperator.equals, value: result.insertedId }],
 				},
 				x_request_id,
@@ -250,11 +253,11 @@ export class Mongo {
 	 */
 
 	async findOne(options: DataSourceFindOneOptions, x_request_id: string): Promise<FindOneResponseObject | undefined> {
-		const mongo = await this.createConnection(options.schema.table)
+		const mongo = await this.createConnection(options.definition.table)
 
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Find Record on for collection ${options.schema.table}: ${JSON.stringify(options.where)}`,
+				`[${DATABASE_TYPE}] Find Record on for collection ${options.definition.table}: ${JSON.stringify(options.where)}`,
 				x_request_id,
 			)
 			const mongoFilters = await this.whereToFilter(options.where)
@@ -291,7 +294,7 @@ export class Mongo {
 	async findMany(options: DataSourceFindManyOptions, x_request_id: string): Promise<FindManyResponseObject> {
 		const total = await this.findTotalRecords(options, x_request_id)
 
-		const mongo = await this.createConnection(options.schema.table)
+		const mongo = await this.createConnection(options.definition.table)
 
 		let mongoFields = {}
 		if (options.fields) {
@@ -302,7 +305,7 @@ export class Mongo {
 
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Find Record on for collection ${options.schema.table}: ${JSON.stringify(options.where)}`,
+				`[${DATABASE_TYPE}] Find Record on for collection ${options.definition.table}: ${JSON.stringify(options.where)}`,
 				x_request_id,
 			)
 
@@ -371,11 +374,11 @@ export class Mongo {
 	 */
 
 	async findTotalRecords(options: DataSourceFindTotalRecords, x_request_id: string): Promise<number> {
-		const mongo = await this.createConnection(options.schema.table)
+		const mongo = await this.createConnection(options.definition.table)
 
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Find Records for collection ${options.schema.table}: ${JSON.stringify(options.where)}`,
+				`[${DATABASE_TYPE}] Find Records for collection ${options.definition.table}: ${JSON.stringify(options.where)}`,
 				x_request_id,
 			)
 			const mongoFilters = await this.whereToFilter(options.where)
@@ -401,7 +404,7 @@ export class Mongo {
 	 */
 
 	async updateOne(options: DataSourceUpdateOneOptions, x_request_id: string): Promise<FindOneResponseObject> {
-		const mongo = await this.createConnection(options.schema.table)
+		const mongo = await this.createConnection(options.definition.table)
 
 		if (options.data['_id']) {
 			delete options.data['_id']
@@ -411,19 +414,19 @@ export class Mongo {
 
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Update Record on for collection ${options.schema.table}: ${JSON.stringify(options.data)}`,
+				`[${DATABASE_TYPE}] Update Record on for collection ${options.definition.table}: ${JSON.stringify(options.data)}`,
 				x_request_id,
 			)
 
 			const mongoFilters = await this.whereToFilter([
-				{ column: options.schema.primary_key, operator: WhereOperator.equals, value: options.id },
+				{ column: options.definition.primary_key, operator: WhereOperator.equals, value: options.id },
 			])
 			const result = await mongo.collection.updateOne(mongoFilters, { $set: options.data })
 			this.logger.debug(`[${DATABASE_TYPE}] Result: ${JSON.stringify(result)}`, x_request_id)
 			mongo.connection.close()
 			return this.findOne(
 				{
-					schema: options.schema,
+					definition: options.definition,
 					where: [{ column: '_id', operator: WhereOperator.equals, value: options.id }],
 				},
 				x_request_id,
@@ -446,11 +449,11 @@ export class Mongo {
 	 */
 
 	async deleteOne(options: DataSourceDeleteOneOptions, x_request_id: string): Promise<DeleteResponseObject> {
-		const mongo = await this.createConnection(options.schema.table)
+		const mongo = await this.createConnection(options.definition.table)
 
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Delete Record on for collection ${options.schema.table}: ${options.id}`,
+				`[${DATABASE_TYPE}] Delete Record on for collection ${options.definition.table}: ${options.id}`,
 				x_request_id,
 			)
 
@@ -460,7 +463,7 @@ export class Mongo {
 				result = await this.updateOne(
 					{
 						id: options.id,
-						schema: options.schema,
+						definition: options.definition,
 						data: {
 							[options.softDelete]: new Date().toISOString().slice(0, 19).replace('T', ' '),
 						},
@@ -469,7 +472,7 @@ export class Mongo {
 				)
 			} else {
 				const mongoFilters = await this.whereToFilter([
-					{ column: options.schema.primary_key, operator: WhereOperator.equals, value: options.id },
+					{ column: options.definition.primary_key, operator: WhereOperator.equals, value: options.id },
 				])
 				result = await mongo.collection.deleteOne(mongoFilters)
 			}
@@ -498,7 +501,7 @@ export class Mongo {
 	 * Create table from schema object
 	 */
 
-	async createTable(schema: DataSourceSchema, x_request_id?: string): Promise<boolean> {
+	async createTable(schema: DataSourceDefinition, x_request_id?: string): Promise<boolean> {
 		const mongo = await this.createConnection(schema.table)
 
 		try {
@@ -688,7 +691,7 @@ export class Mongo {
 
 	private formatOutput(options: DataSourceFindOneOptions, data: { [key: string]: any }): object {
 		for (const key in data) {
-			const column = options.schema.columns.find(c => c.field === key)
+			const column = options.definition.columns.find(c => c.field === key)
 
 			if (!column) {
 				continue
@@ -717,7 +720,7 @@ export class Mongo {
 		options: DataSourceCreateOneOptions | DataSourceUpdateOneOptions,
 	): DataSourceCreateOneOptions | DataSourceUpdateOneOptions {
 		// Convert Date to ISOString
-		for (const column of options.schema.columns) {
+		for (const column of options.definition.columns) {
 			if (!options.data[column.field]) {
 				continue
 			}

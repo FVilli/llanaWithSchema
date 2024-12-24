@@ -13,11 +13,11 @@ import { Pagination } from '../helpers/Pagination'
 import {
 	DataSourceColumnType,
 	DataSourceCreateOneOptions,
+	DataSourceDefinition,
 	DataSourceDeleteOneOptions,
 	DataSourceFindManyOptions,
 	DataSourceFindOneOptions,
 	DataSourceFindTotalRecords,
-	DataSourceSchema,
 	DataSourceSchemaColumn,
 	DataSourceSchemaRelation,
 	DataSourceType,
@@ -131,7 +131,7 @@ export class Airtable {
 	 * @param table_name
 	 */
 
-	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceSchema> {
+	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceDefinition> {
 		try {
 			this.logger.debug(`[${DATABASE_TYPE}] Get Schema for table ${options.table}`, options.x_request_id)
 
@@ -170,6 +170,7 @@ export class Airtable {
 
 					relations.push({
 						table: linkedTable.name,
+						schema: '?',
 						column: 'id',
 						org_table: options.table,
 						org_column: field.name,
@@ -189,14 +190,15 @@ export class Airtable {
 				})
 			}
 
-			const schema = {
+			const definition = {
 				table: options.table,
+				schema: '?',
 				columns,
 				primary_key: columns.find(column => column.primary_key)?.field,
 				relations,
 			}
 
-			return schema
+			return definition
 		} catch (e) {
 			this.logger.warn(`[${DATABASE_TYPE}] Error getting schema - ${e.message}`)
 			throw new Error(e)
@@ -209,25 +211,25 @@ export class Airtable {
 
 	async createOne(options: DataSourceCreateOneOptions, x_request_id?: string): Promise<FindOneResponseObject> {
 		this.logger.debug(
-			`[${DATABASE_TYPE}] Create Record on ${options.schema.table}: ${JSON.stringify(options.data)}`,
+			`[${DATABASE_TYPE}] Create Record on ${options.definition.table}: ${JSON.stringify(options.data)}`,
 			x_request_id,
 		)
 
 		try {
-			for (const col of options.schema.columns) {
+			for (const col of options.definition.columns) {
 				if (col.foreign_key) {
 					if (options.data[col.field]) {
 						if (!Array.isArray(options.data[col.field])) {
 							options.data[col.field] = [options.data[col.field]]
 						}
 
-						const linkedTable = options.schema.relations.find(r => r.org_column === col.field)
+						const linkedTable = options.definition.relations.find(r => r.org_column === col.field)
 
 						for (const id of options.data[col.field]) {
 							const linkedSchema = await this.getSchema({ table: linkedTable.table })
 							const linkedRecord = await this.findOne(
 								{
-									schema: linkedSchema,
+									definition: linkedSchema,
 									where: [{ column: 'id', operator: WhereOperator.equals, value: id }],
 								},
 								x_request_id,
@@ -242,7 +244,7 @@ export class Airtable {
 			}
 
 			const result = await this.createRequest({
-				endpoint: `/BaseId/${options.schema.table}`,
+				endpoint: `/BaseId/${options.definition.table}`,
 				method: 'POST',
 				data: {
 					records: [
@@ -283,23 +285,23 @@ export class Airtable {
 	async findOne(options: DataSourceFindOneOptions, x_request_id: string): Promise<FindOneResponseObject | undefined> {
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Find Record on ${options.schema.table}: ${JSON.stringify(options.where)}`,
+				`[${DATABASE_TYPE}] Find Record on ${options.definition.table}: ${JSON.stringify(options.where)}`,
 				x_request_id,
 			)
 
 			const fields =
 				options.fields?.length > 0
 					? options.fields
-					: [...options.schema.columns.map(c => c.field)].filter(f => f !== 'id')
+					: [...options.definition.columns.map(c => c.field)].filter(f => f !== 'id')
 
-			const id = options.where.find(w => w.column === options.schema.primary_key)?.value
+			const id = options.where.find(w => w.column === options.definition.primary_key)?.value
 
 			if (!id) {
 				// Find Many and return first result
 				const results = await this.findMany(
 					{
 						fields,
-						schema: options.schema,
+						definition: options.definition,
 						where: options.where,
 						limit: 1,
 						offset: 0,
@@ -310,7 +312,7 @@ export class Airtable {
 				return results.data[0]
 			}
 
-			let endpoint = `/BaseId/${options.schema.table}/${id}`
+			let endpoint = `/BaseId/${options.definition.table}/${id}`
 
 			const result = await this.createRequest({
 				endpoint,
@@ -345,7 +347,7 @@ export class Airtable {
 
 	async findMany(options: DataSourceFindManyOptions, x_request_id: string): Promise<FindManyResponseObject> {
 		//If primary key is passed in where clause, return single record
-		if (options.where.length === 1 && options.where[0].column === options.schema.primary_key) {
+		if (options.where.length === 1 && options.where[0].column === options.definition.primary_key) {
 			return {
 				limit: options.limit,
 				offset: options.offset,
@@ -363,7 +365,7 @@ export class Airtable {
 				data: [
 					await this.findOne(
 						{
-							schema: options.schema,
+							definition: options.definition,
 							where: options.where,
 							fields: options.fields,
 						},
@@ -377,7 +379,7 @@ export class Airtable {
 
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Find Record on ${options.schema.table}: ${JSON.stringify(options.where)}`,
+				`[${DATABASE_TYPE}] Find Record on ${options.definition.table}: ${JSON.stringify(options.where)}`,
 				x_request_id,
 			)
 
@@ -403,12 +405,12 @@ export class Airtable {
 				offset = options.offset
 			}
 
-			const filterByFormula = await this.whereToFilter(options.where, options.schema)
+			const filterByFormula = await this.whereToFilter(options.where, options.definition)
 
 			const fields =
 				options.fields?.length > 0
 					? options.fields
-					: [...options.schema.columns.map(c => c.field)].filter(f => f !== 'id')
+					: [...options.definition.columns.map(c => c.field)].filter(f => f !== 'id')
 
 			if (offset) {
 				//Offset not supported by airtable.
@@ -434,7 +436,7 @@ export class Airtable {
 
 						const result = await this.createRequest({
 							method: 'POST',
-							endpoint: `/BaseId/${options.schema.table}/listRecords`,
+							endpoint: `/BaseId/${options.definition.table}/listRecords`,
 							data,
 							x_request_id,
 						})
@@ -445,7 +447,7 @@ export class Airtable {
 				} else {
 					const result = await this.createRequest({
 						method: 'POST',
-						endpoint: `/BaseId/${options.schema.table}/listRecords`,
+						endpoint: `/BaseId/${options.definition.table}/listRecords`,
 						data: {
 							pageSize: options.offset,
 							fields,
@@ -472,7 +474,7 @@ export class Airtable {
 
 			const findAllRequest = {
 				method: 'POST',
-				endpoint: `/BaseId/${options.schema.table}/listRecords`,
+				endpoint: `/BaseId/${options.definition.table}/listRecords`,
 				data,
 				x_request_id,
 			}
@@ -523,9 +525,9 @@ export class Airtable {
 	async findTotalRecords(options: DataSourceFindTotalRecords, x_request_id: string): Promise<number> {
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Find Records on ${options.schema.table}: ${JSON.stringify(options.where)} ${x_request_id ?? ''}`,
+				`[${DATABASE_TYPE}] Find Records on ${options.definition.table}: ${JSON.stringify(options.where)} ${x_request_id ?? ''}`,
 			)
-			const filterByFormula = await this.whereToFilter(options.where, options.schema)
+			const filterByFormula = await this.whereToFilter(options.where, options.definition)
 
 			let offset = undefined
 			let total = 0
@@ -544,7 +546,7 @@ export class Airtable {
 
 				const result = await this.createRequest({
 					method: 'POST',
-					endpoint: `/BaseId/${options.schema.table}/listRecords`,
+					endpoint: `/BaseId/${options.definition.table}/listRecords`,
 					data,
 					x_request_id,
 				})
@@ -581,29 +583,29 @@ export class Airtable {
 	 */
 
 	async updateOne(options: DataSourceUpdateOneOptions, x_request_id: string): Promise<FindOneResponseObject> {
-		if (options.data[options.schema.primary_key]) {
-			delete options.data[options.schema.primary_key]
+		if (options.data[options.definition.primary_key]) {
+			delete options.data[options.definition.primary_key]
 		}
 
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Update Record on ${options.schema.table}: ${JSON.stringify(options.data)} ${x_request_id ?? ''}`,
+				`[${DATABASE_TYPE}] Update Record on ${options.definition.table}: ${JSON.stringify(options.data)} ${x_request_id ?? ''}`,
 			)
 
-			for (const col of options.schema.columns) {
+			for (const col of options.definition.columns) {
 				if (col.foreign_key) {
 					if (options.data[col.field]) {
 						if (!Array.isArray(options.data[col.field])) {
 							options.data[col.field] = [options.data[col.field]]
 						}
 
-						const linkedTable = options.schema.relations.find(r => r.org_column === col.field)
+						const linkedTable = options.definition.relations.find(r => r.org_column === col.field)
 
 						for (const id of options.data[col.field]) {
 							const linkedSchema = await this.getSchema({ table: linkedTable.table })
 							const linkedRecord = await this.findOne(
 								{
-									schema: linkedSchema,
+									definition: linkedSchema,
 									where: [{ column: 'id', operator: WhereOperator.equals, value: id }],
 								},
 								x_request_id,
@@ -618,7 +620,7 @@ export class Airtable {
 			}
 
 			const result = await this.createRequest({
-				endpoint: `/BaseId/${options.schema.table}/${options.id}`,
+				endpoint: `/BaseId/${options.definition.table}/${options.id}`,
 				method: 'PATCH',
 				data: {
 					fields: options.data,
@@ -655,7 +657,7 @@ export class Airtable {
 	async deleteOne(options: DataSourceDeleteOneOptions, x_request_id: string): Promise<DeleteResponseObject> {
 		try {
 			this.logger.debug(
-				`[${DATABASE_TYPE}] Delete Record on ${options.schema.table}: ${options.id} ${x_request_id ?? ''}`,
+				`[${DATABASE_TYPE}] Delete Record on ${options.definition.table}: ${options.id} ${x_request_id ?? ''}`,
 			)
 
 			let result
@@ -664,7 +666,7 @@ export class Airtable {
 				result = await this.updateOne(
 					{
 						id: options.id,
-						schema: options.schema,
+						definition: options.definition,
 						data: {
 							[options.softDelete]: new Date().toISOString().slice(0, 19).replace('T', ' '),
 						},
@@ -673,7 +675,7 @@ export class Airtable {
 				)
 			} else {
 				result = await this.createRequest({
-					endpoint: `/BaseId/${options.schema.table}/${options.id}`,
+					endpoint: `/BaseId/${options.definition.table}/${options.id}`,
 					method: 'DELETE',
 				})
 			}
@@ -701,7 +703,7 @@ export class Airtable {
 	 * Create table from schema object
 	 */
 
-	async createTable(schema: DataSourceSchema, x_request_id?: string): Promise<boolean> {
+	async createTable(schema: DataSourceDefinition, x_request_id?: string): Promise<boolean> {
 		try {
 			this.logger.debug(`[${DATABASE_TYPE}] Create table ${schema.table}`, x_request_id)
 
@@ -846,7 +848,7 @@ export class Airtable {
 	/**
 	 * Convert a Llana DatabaseWhere to Airtable filterByFormula object
 	 */
-	async whereToFilter(where: DataSourceWhere[], schema: DataSourceSchema): Promise<string> {
+	async whereToFilter(where: DataSourceWhere[], schema: DataSourceDefinition): Promise<string> {
 		let filter = ''
 
 		if (!where || where.length === 0) {
@@ -1029,7 +1031,7 @@ export class Airtable {
 		}
 
 		for (const key in data) {
-			const column = options.schema.columns.find(c => c.field === key)
+			const column = options.definition.columns.find(c => c.field === key)
 
 			if (!column) {
 				continue

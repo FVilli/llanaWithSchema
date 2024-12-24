@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common'
 import { Test, TestingModule } from '@nestjs/testing'
 import * as jwt from 'jwt-simple'
 import { io, Socket } from 'socket.io-client' // Changed import
-import { DataSourceSchema, PublishType } from 'src/types/datasource.types'
+import { DataSourceDefinition, PublishType } from 'src/types/datasource.types'
 import { AppModule } from '../../app.module'
 import { WebsocketGateway } from './websocket.gateway'
 import { WebsocketService } from './websocket.service'
@@ -83,7 +83,7 @@ describe('WebsocketGateway', () => {
 
 	it(`should send valid message to a user`, async () => {
 		const clientSocket = await listenAndOpenSocket(token1, table1)
-		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceSchema, PublishType.INSERT, 12)
+		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceDefinition, PublishType.INSERT, 12)
 		const event = await waitForSocketEvent(clientSocket)
 		expect(event).toEqual({
 			type: 'INSERT',
@@ -96,7 +96,7 @@ describe('WebsocketGateway', () => {
 		mockAuthResponse = {
 			valid: false,
 		}
-		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceSchema, PublishType.INSERT, 12)
+		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceDefinition, PublishType.INSERT, 12)
 		const event = await waitForSocketEvent(clientSocket)
 		expect(event).toBeUndefined()
 	})
@@ -106,7 +106,7 @@ describe('WebsocketGateway', () => {
 		const user2Socket = await listenAndOpenSocket(token2, table1, PORT1)
 
 		const promises = [waitForSocketEvent(clientSocket), waitForSocketEvent(user2Socket)]
-		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceSchema, PublishType.INSERT, 12)
+		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceDefinition, PublishType.INSERT, 12)
 		const [eventUser1, eventUser2] = await Promise.all(promises)
 		user2Socket.close()
 		expect(eventUser1).toBeDefined()
@@ -118,7 +118,7 @@ describe('WebsocketGateway', () => {
 		const user2Socket = await listenAndOpenSocket(token2, table1, PORT2)
 
 		const promises = [waitForSocketEvent(clientSocket), waitForSocketEvent(user2Socket)]
-		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceSchema, PublishType.INSERT, 12)
+		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceDefinition, PublishType.INSERT, 12)
 		const [eventUser1, eventUser2] = await Promise.all(promises)
 		user2Socket.close()
 		expect(eventUser1).toBeDefined()
@@ -127,7 +127,7 @@ describe('WebsocketGateway', () => {
 
 	it(`should send message to a on another server`, async () => {
 		const clientSocket = await listenAndOpenSocket(token1, table1, PORT2) // the other app
-		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceSchema, PublishType.INSERT, 12)
+		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceDefinition, PublishType.INSERT, 12)
 		const event = await waitForSocketEvent(clientSocket)
 		expect(event).toEqual({
 			type: 'INSERT',
@@ -137,7 +137,7 @@ describe('WebsocketGateway', () => {
 
 	it(`should send message to a user on another server (opposite server)`, async () => {
 		const clientSocket = await listenAndOpenSocket(token1, table1, PORT1) // the other app
-		app2.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceSchema, PublishType.INSERT, 12)
+		app2.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceDefinition, PublishType.INSERT, 12)
 		const event = await waitForSocketEvent(clientSocket)
 		expect(event).toEqual({
 			type: 'INSERT',
@@ -151,7 +151,7 @@ describe('WebsocketGateway', () => {
 		const user2Socket = await listenAndOpenSocket(token2, table2, PORT1)
 
 		const promises = [waitForSocketEvent(clientSocket), waitForSocketEvent(user2Socket)]
-		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceSchema, PublishType.INSERT, 12)
+		app1.service.publish({ table: table1, primary_key: 'test_id' } as DataSourceDefinition, PublishType.INSERT, 12)
 		const [eventUser1, eventUser2] = await Promise.all(promises)
 		user2Socket.close()
 		expect(eventUser1).toBeDefined()
@@ -164,7 +164,7 @@ describe('WebsocketGateway', () => {
 		const user2Socket = await listenAndOpenSocket(token2, table2, PORT1)
 
 		const promises = [waitForSocketEvent(clientSocket), waitForSocketEvent(user2Socket)]
-		app1.service.publish({ table: table2, primary_key: 'test_id' } as DataSourceSchema, PublishType.INSERT, 12)
+		app1.service.publish({ table: table2, primary_key: 'test_id' } as DataSourceDefinition, PublishType.INSERT, 12)
 		const [eventUser1, eventUser2] = await Promise.all(promises)
 		user2Socket.close()
 		expect(eventUser1).toBeUndefined()

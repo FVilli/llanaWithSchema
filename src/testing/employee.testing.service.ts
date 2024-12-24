@@ -2,8 +2,8 @@ import { faker } from '@faker-js/faker'
 import { Injectable } from '@nestjs/common'
 
 import { FindOneResponseObject } from '../dtos/response.dto'
+import { Definition } from '../helpers/Definition'
 import { Query } from '../helpers/Query'
-import { Schema } from '../helpers/Schema'
 import { QueryPerform } from '../types/datasource.types'
 
 const table = 'Employee'
@@ -12,7 +12,7 @@ const table = 'Employee'
 export class EmployeeTestingService {
 	constructor(
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 	) {}
 
 	mockEmployee(): any {
@@ -42,19 +42,19 @@ export class EmployeeTestingService {
 		}
 	}
 
-	async getSchema(): Promise<any> {
-		return await this.schema.getSchema({ table })
+	async getDef(item?: string): Promise<any> {
+		if (!item) item = table
+		return await this.definition.getDefinition(item, this.query.defaultSchema, 'testing')
 	}
-
 	async createEmployee(employee: any): Promise<any> {
-		const employeeTableSchema = await this.schema.getSchema({ table })
+		const definition = await this.getDef()
 
 		const EMPLOYEE = this.mockEmployee()
 
 		return (await this.query.perform(
 			QueryPerform.CREATE,
 			{
-				schema: employeeTableSchema,
+				definition,
 				data: {
 					...EMPLOYEE,
 					...employee,
@@ -65,23 +65,23 @@ export class EmployeeTestingService {
 	}
 
 	async getEmployee(): Promise<any> {
-		const employeeTableSchema = await this.schema.getSchema({ table })
+		const definition = await this.getDef()
 
 		return (await this.query.perform(
 			QueryPerform.FIND_ONE,
 			{
-				schema: employeeTableSchema,
+				definition: definition,
 			},
 			'testing',
 		)) as FindOneResponseObject
 	}
 
 	async deleteEmployee(employee_id: any): Promise<void> {
-		const employeeTableSchema = await this.schema.getSchema({ table })
+		const definition = await this.getDef()
 		await this.query.perform(
 			QueryPerform.DELETE,
 			{
-				schema: employeeTableSchema,
+				definition: definition,
 				id: employee_id,
 			},
 			'testing',

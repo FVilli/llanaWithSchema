@@ -7,7 +7,7 @@ import { CustomerTestingService } from './testing/customer.testing.service'
 
 import { AppModule } from './app.module'
 import { AuthTestingService } from './testing/auth.testing.service'
-import { DataSourceSchema } from './types/datasource.types'
+import { DataSourceDefinition } from './types/datasource.types'
 
 // Import configs
 import auth from './config/auth.config'
@@ -26,7 +26,7 @@ describe('App > Controller > Delete', () => {
 	let authTestingService: AuthTestingService
 	let customerTestingService: CustomerTestingService
 
-	let customerSchema: DataSourceSchema
+	let customerSchema: DataSourceDefinition
 
 	let customer1: any
 	let customer2: any
@@ -62,7 +62,7 @@ describe('App > Controller > Delete', () => {
 		authTestingService = app.get<AuthTestingService>(AuthTestingService)
 		customerTestingService = app.get<CustomerTestingService>(CustomerTestingService)
 
-		customerSchema = await customerTestingService.getSchema()
+		customerSchema = await customerTestingService.getDef()
 
 		customer1 = await customerTestingService.createCustomer({})
 		customer2 = await customerTestingService.createCustomer({})

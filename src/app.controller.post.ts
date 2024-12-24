@@ -5,10 +5,10 @@ import { HeaderParams } from './dtos/requests.dto'
 import { CreateManyResponseObject, FindOneResponseObject, IsUniqueResponse } from './dtos/response.dto'
 import { Authentication } from './helpers/Authentication'
 import { UrlToTable } from './helpers/Database'
+import { Definition } from './helpers/Definition'
 import { Query } from './helpers/Query'
 import { Response } from './helpers/Response'
 import { Roles } from './helpers/Roles'
-import { Schema } from './helpers/Schema'
 import { Webhook } from './helpers/Webhook'
 import { WebsocketService } from './modules/websocket/websocket.service'
 import { AuthTablePermissionFailResponse } from './types/auth.types'
@@ -20,7 +20,7 @@ export class PostController {
 	constructor(
 		private readonly authentication: Authentication,
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 		private readonly response: Response,
 		private readonly roles: Roles,
 		private readonly websocket: WebsocketService,
@@ -38,14 +38,15 @@ export class PostController {
 		@Headers() headers: HeaderParams,
 	): Promise<FindOneResponseObject | CreateManyResponseObject> {
 		const x_request_id = headers['x-request-id']
-		let table_name = UrlToTable(req.originalUrl, 1)
+		let { schema, tableOrView } = this.query.urlParser(UrlToTable(req.originalUrl, 1))
 
-		if (table_name === 'webhook') {
-			table_name = LLANA_WEBHOOK_TABLE
+		if (tableOrView === 'webhook') {
+			tableOrView = LLANA_WEBHOOK_TABLE
 
 			//perform auth on webhook table
 			const auth = await this.authentication.auth({
 				table: req.body.table,
+				schema,
 				x_request_id,
 				access: RolePermission.READ,
 				headers: req.headers,
@@ -78,18 +79,19 @@ export class PostController {
 		const body = req.body
 
 		const options: DataSourceCreateOneOptions = {
-			schema: null,
+			definition: null,
 			data: {},
 		}
 
 		try {
-			options.schema = await this.schema.getSchema({ table: table_name, x_request_id })
+			options.definition = await this.definition.getDefinition(tableOrView, schema, x_request_id)
 		} catch (e) {
 			return res.status(404).send(this.response.text(e.message))
 		}
 
 		const auth = await this.authentication.auth({
-			table: table_name,
+			table: tableOrView,
+			schema,
 			x_request_id,
 			access: RolePermission.WRITE,
 			headers: req.headers,
@@ -104,7 +106,7 @@ export class PostController {
 		if (auth.user_identifier) {
 			const { valid, message } = (await this.roles.tablePermission({
 				identifier: auth.user_identifier,
-				table: table_name,
+				table: tableOrView,
 				access: RolePermission.WRITE,
 				x_request_id,
 			})) as AuthTablePermissionFailResponse
@@ -135,14 +137,14 @@ export class PostController {
 
 				data.push(insertResult.result)
 				await this.websocket.publish(
-					options.schema,
+					options.definition,
 					PublishType.INSERT,
-					insertResult.result[options.schema.primary_key],
+					insertResult.result[options.definition.primary_key],
 				)
 				await this.webhook.publish(
-					options.schema,
+					options.definition,
 					PublishType.INSERT,
-					insertResult.result[options.schema.primary_key],
+					insertResult.result[options.definition.primary_key],
 					auth.user_identifier,
 				)
 				successful++
@@ -180,7 +182,7 @@ export class PostController {
 		result?: FindOneResponseObject
 	}> {
 		//validate input data
-		const { valid, message, instance } = await this.schema.validateData(options.schema, data)
+		const { valid, message, instance } = await this.definition.validateData(options.schema, data)
 		if (!valid) {
 			return {
 				valid,

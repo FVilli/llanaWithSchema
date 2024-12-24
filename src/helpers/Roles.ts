@@ -8,9 +8,9 @@ import { FindManyResponseObject } from '../dtos/response.dto'
 import { AuthTablePermissionFailResponse, AuthTablePermissionSuccessResponse } from '../types/auth.types'
 import { QueryPerform, WhereOperator } from '../types/datasource.types'
 import { RolePermission, RolesConfig } from '../types/roles.types'
+import { Definition } from './Definition'
 import { Logger } from './Logger'
 import { Query } from './Query'
-import { Schema } from './Schema'
 
 @Injectable()
 export class Roles {
@@ -19,7 +19,7 @@ export class Roles {
 		private readonly configService: ConfigService,
 		private readonly logger: Logger,
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 	) {}
 
 	/**
@@ -49,9 +49,13 @@ export class Roles {
 			return permission_result
 		}
 
-		const schema = await this.schema.getSchema({ table: options.table, x_request_id: options.x_request_id })
+		const definition = await this.definition.getDefinition(
+			options.table,
+			this.query.defaultSchema,
+			options.x_request_id,
+		)
 
-		if (!schema) {
+		if (!definition) {
 			permission_result = <AuthTablePermissionFailResponse>{
 				valid: false,
 				message: 'Table not found',
@@ -94,15 +98,16 @@ export class Roles {
 			return permission_result
 		}
 
-		const permission_schema = await this.schema.getSchema({
-			table: LLANA_ROLES_TABLE,
-			x_request_id: options.x_request_id,
-		})
+		const permission_definition = await this.definition.getDefinition(
+			LLANA_ROLES_TABLE,
+			this.query.defaultSchema,
+			options.x_request_id,
+		)
 
 		const custom_permissions = (await this.query.perform(
 			QueryPerform.FIND_MANY,
 			{
-				schema: permission_schema,
+				definition: permission_definition,
 				where: [
 					{
 						column: 'custom',
@@ -143,7 +148,7 @@ export class Roles {
 					permission_result = <AuthTablePermissionSuccessResponse>{
 						valid: true,
 						restriction: {
-							column: permission.identity_column ?? schema.primary_key,
+							column: permission.identity_column ?? definition.primary_key,
 							operator: WhereOperator.equals,
 							value: options.identifier,
 						},
@@ -161,7 +166,7 @@ export class Roles {
 		const default_permissions = (await this.query.perform(
 			QueryPerform.FIND_MANY,
 			{
-				schema: permission_schema,
+				definition: permission_definition,
 				where: [
 					{
 						column: 'custom',
@@ -213,20 +218,24 @@ export class Roles {
 	private async getRole(identifier: string, x_request_id: string): Promise<string | undefined> {
 		const config = this.configService.get<RolesConfig>('roles')
 
-		let table_schema
+		let definition
 
 		try {
-			table_schema = await this.schema.getSchema({ table: config.location.table, x_request_id })
+			definition = await this.definition.getDefinition(
+				config.location.table,
+				this.query.defaultSchema,
+				x_request_id,
+			)
 		} catch (e) {
 			throw new Error(e)
 		}
 
-		const user_id_column = config.location?.identifier_column ?? table_schema.primary_key
+		const user_id_column = config.location?.identifier_column ?? definition.primary_key
 
 		const role = await this.query.perform(
 			QueryPerform.FIND_ONE,
 			{
-				schema: table_schema,
+				definition,
 				fields: [config.location.column],
 				where: [
 					{

@@ -10,6 +10,7 @@ import {
 import Redis from 'ioredis'
 import { Server } from 'socket.io'
 import { Authentication } from 'src/helpers/Authentication'
+import { Query } from 'src/helpers/Query'
 import { HostCheckMiddleware } from 'src/middleware/HostCheck'
 import { RolePermission } from 'src/types/roles.types'
 
@@ -37,6 +38,7 @@ export class WebsocketGateway
 		private readonly logger: Logger,
 		private readonly _authentication: Authentication,
 		private readonly hostCheckMiddleware: HostCheckMiddleware,
+		private readonly query: Query,
 		@Inject(REDIS_SUB_CLIENT_TOKEN) private readonly redisSubClient: Redis,
 	) {}
 
@@ -88,6 +90,7 @@ export class WebsocketGateway
 		for (const [sub, socketId] of Object.entries(userSockets)) {
 			const auth = await this.authentication.auth({
 				table: msg.tableName,
+				schema: this.query.defaultSchema,
 				access: RolePermission.READ,
 				user_identifier: sub,
 			})

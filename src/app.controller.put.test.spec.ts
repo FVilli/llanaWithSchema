@@ -7,7 +7,7 @@ import { CustomerTestingService } from './testing/customer.testing.service'
 
 import { AppModule } from './app.module'
 import { AuthTestingService } from './testing/auth.testing.service'
-import { DataSourceSchema } from './types/datasource.types'
+import { DataSourceDefinition } from './types/datasource.types'
 import { SalesOrderTestingService } from './testing/salesorder.testing.service'
 import { EmployeeTestingService } from './testing/employee.testing.service'
 import { ShipperTestingService } from './testing/shipper.testing.service'
@@ -36,11 +36,11 @@ describe('App > Controller > Put', () => {
 	let salesOrderTestingService: SalesOrderTestingService
 	let userTestingService: UserTestingService
 
-	let customerSchema: DataSourceSchema
-	let employeeSchema: DataSourceSchema
-	let shipperSchema: DataSourceSchema
-	let orderSchema: DataSourceSchema
-	let userSchema: DataSourceSchema
+	let customerSchema: DataSourceDefinition
+	let employeeSchema: DataSourceDefinition
+	let shipperSchema: DataSourceDefinition
+	let orderSchema: DataSourceDefinition
+	let userSchema: DataSourceDefinition
 
 	let customer1: any
 	let customer2: any
@@ -99,11 +99,11 @@ describe('App > Controller > Put', () => {
 		salesOrderTestingService = app.get<SalesOrderTestingService>(SalesOrderTestingService)
 		userTestingService = app.get<UserTestingService>(UserTestingService)
 
-		customerSchema = await customerTestingService.getSchema()
-		employeeSchema = await employeeTestingService.getSchema()
-		shipperSchema = await shipperTestingService.getSchema()
-		orderSchema = await salesOrderTestingService.getSchema()
-		userSchema = await userTestingService.getSchema()
+		customerSchema = await customerTestingService.getDef()
+		employeeSchema = await employeeTestingService.getDef()
+		shipperSchema = await shipperTestingService.getDef()
+		orderSchema = await salesOrderTestingService.getDef()
+		userSchema = await userTestingService.getDef()
 
 		customer1 = await customerTestingService.createCustomer({})
 		customer2 = await customerTestingService.createCustomer({})

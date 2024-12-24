@@ -5,14 +5,14 @@ import { OpenAPIV3_1 } from 'openapi-types'
 
 import { version } from '../../package.json'
 import { APP_BOOT_CONTEXT, LLANA_WEBHOOK_TABLE } from '../app.constants'
-import { ListTablesResponseObject } from '../dtos/response.dto'
+import { Item } from '../dtos/response.dto'
 import { AuthLocation } from '../types/auth.types'
-import { DataSourceColumnType, DataSourceSchema, QueryPerform } from '../types/datasource.types'
+import { DataSourceColumnType, DataSourceDefinition } from '../types/datasource.types'
 import { plural } from '../utils/String'
 import { Authentication } from './Authentication'
 import { Logger } from './Logger'
 import { Query } from './Query'
-import { Schema } from './Schema'
+import { Definition } from './Definition'
 
 @Injectable()
 export class Documentation {
@@ -21,7 +21,7 @@ export class Documentation {
 		private readonly logger: Logger,
 		private readonly configService: ConfigService,
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly schema: Definition,
 	) {}
 
 	/**
@@ -42,7 +42,7 @@ export class Documentation {
 	 * Generate documentation for the application
 	 */
 
-	async generateDocumentation(): Promise<OpenAPIV3_1.Document> {
+	async generateDocumentation(tables: Item[], views: Item[], defaultSchema: string): Promise<OpenAPIV3_1.Document> {
 		this.logger.log('Generating documentation')
 
 		const apiDoc: OpenAPIV3_1.Document = {
@@ -73,13 +73,15 @@ export class Documentation {
 
 		apiDoc.components.schemas['AuthenticationTokenResponse'] = this.getAuthLoginComponent()
 
-		const { tables } = (await this.query.perform(
-			QueryPerform.LIST_TABLES,
-			undefined,
-			APP_BOOT_CONTEXT,
-		)) as ListTablesResponseObject
-		for (const table of tables) {
-			const schema = await this.schema.getSchema({ table, x_request_id: APP_BOOT_CONTEXT })
+		for (const item of tables) {
+			const table = item.name
+
+			const schema = await this.schema.getSchema({
+				tableOrView: table,
+				schema: item.schema,
+				isView: false,
+				x_request_id: APP_BOOT_CONTEXT,
+			})
 
 			if (schema.table === this.authentication.getIdentityTable()) {
 				apiDoc.paths['/auth/profile'] = {
@@ -240,11 +242,189 @@ export class Documentation {
 			}
 		}
 
+		// const { tables } = (await this.query.perform(
+		// 	QueryPerform.LIST_TABLES,
+		// 	undefined,
+		// 	APP_BOOT_CONTEXT,
+		// )) as ListTablesResponseObject
+		for (const item of views) {
+			const view = item.name
+			const schema = await this.schema.getSchema({
+				tableOrView: view,
+				schema: item.schema,
+				isView: true,
+				x_request_id: APP_BOOT_CONTEXT,
+			})
+
+			if (schema.table === this.authentication.getIdentityTable()) {
+				apiDoc.paths['/auth/profile'] = {
+					get: <any>{
+						description: 'Returns the user profile',
+						summary: 'Get Profile',
+						tags: ['Authentication'],
+						security: [
+							{
+								bearerAuth: [],
+							},
+						],
+						responses: {
+							200: this.get200Response(this.convertSchemaToOpenAPIExample(schema), 'UserProfileResponse'),
+							401: this.get401Response(),
+						},
+					},
+				}
+
+				apiDoc.components.schemas['UserProfileResponse'] = this.convertSchemaToOpenAPISchema(schema)
+			}
+
+			apiDoc.paths[`/${view}/`] = {
+				// post: <any>{
+				// 	description: `Creates a new ${table}`,
+				// 	summary: `Create ${table}`,
+				// 	tags: [table],
+				// 	security: [
+				// 		{
+				// 			bearerAuth: [],
+				// 			apiKeyAuth: [],
+				// 		},
+				// 	],
+				// 	requestBody: this.getRequestBody(
+				// 		this.convertSchemaToOpenAPIBodyRequest(schema),
+				// 		this.convertSchemaRequiredToOpenAPI(schema),
+				// 	),
+				// 	responses: {
+				// 		201: this.get200Response(this.convertSchemaToOpenAPIExample(schema), table + 'Response'),
+				// 		400: this.get400Response(),
+				// 		401: this.get401Response(),
+				// 	},
+				// },
+				get: <any>{
+					description: `Returns a list of ${plural(view)} records`,
+					summary: `List ${plural(view)}`,
+					tags: [view],
+					requestBody: this.getListRequestBody(schema),
+					security: [
+						{
+							bearerAuth: [],
+							apiKeyAuth: [],
+						},
+					],
+					responses: {
+						200: this.get200Response(
+							{
+								limit: 20,
+								offset: 0,
+								total: 70,
+								pagination: {
+									total: 20,
+									page: {
+										current: 'eyJsaW1pdCI6MjAsIm9mZnNldCI6MH0=',
+										prev: null,
+										next: 'eyJsaW1pdCI6MjAsIm9mZnNldCI6MjB9',
+										first: 'eyJsaW1pdCI6MjAsIm9mZnNldCI6MH0=',
+										last: 'eyJsaW1pdCI6MjAsIm9mZnNldCI6NTB9',
+									},
+								},
+								data: [this.convertSchemaToOpenAPIExample(schema)],
+							},
+							'List' + view + 'Response',
+						),
+						400: this.get400Response(),
+						401: this.get401Response(),
+					},
+				},
+			}
+
+			const response_schema = schema
+			delete response_schema._x_request_id
+
+			apiDoc.paths[`/${view}/:id`] = {
+				get: <any>{
+					description: `Returns a record of ${view}`,
+					summary: `Get ${view}`,
+					tags: [view],
+					requestBody: this.getSingleRequestBody(schema),
+					security: [
+						{
+							bearerAuth: [],
+							apiKeyAuth: [],
+						},
+					],
+					responses: {
+						200: this.get200Response(this.convertSchemaToOpenAPIExample(schema), view + 'Response'),
+						400: this.get400Response(),
+						401: this.get401Response(),
+					},
+				},
+				// put: <any>{
+				// 	description: `Updates a ${table} record`,
+				// 	summary: `Update ${table}`,
+				// 	tags: [table],
+				// 	security: [
+				// 		{
+				// 			bearerAuth: [],
+				// 			apiKeyAuth: [],
+				// 		},
+				// 	],
+				// 	requestBody: this.getRequestBody(this.convertSchemaToOpenAPIBodyRequest(schema), []),
+				// 	responses: {
+				// 		201: this.get200Response(this.convertSchemaToOpenAPIExample(schema), table + 'Response'),
+				// 		400: this.get400Response(),
+				// 		401: this.get401Response(),
+				// 	},
+				// },
+				// delete: <any>{
+				// 	description: `Deletes a record of ${table}`,
+				// 	summary: `Delete ${table}`,
+				// 	tags: [table],
+				// 	security: [
+				// 		{
+				// 			bearerAuth: [],
+				// 			apiKeyAuth: [],
+				// 		},
+				// 	],
+				// 	responses: {
+				// 		200: this.get200Response(
+				// 			{
+				// 				deleted: 1,
+				// 			},
+				// 			table + 'DeleteResponse',
+				// 		),
+				// 		400: this.get400Response(),
+				// 		401: this.get401Response(),
+				// 	},
+				// },
+			}
+
+			apiDoc.paths[`/${view}/schema`] = {
+				get: <any>{
+					description: `Returns the table schema for ${view}`,
+					summary: `Schema`,
+					tags: [view],
+					security: [
+						{
+							bearerAuth: [],
+							apiKeyAuth: [],
+						},
+					],
+					responses: {
+						200: this.get200Response(response_schema, 'SchemaResponse'),
+						401: this.get401Response(),
+					},
+				},
+			}
+		}
+
 		// Add webhooks endpoints
 
 		if (!this.configService.get<boolean>('DISABLE_WEBHOOKS')) {
 			const table = 'webhook'
-			const schema = await this.schema.getSchema({ table: LLANA_WEBHOOK_TABLE, x_request_id: APP_BOOT_CONTEXT })
+			const schema = await this.schema.getSchema({
+				tableOrView: LLANA_WEBHOOK_TABLE,
+				schema: defaultSchema,
+				isView: false,
+				x_request_id: APP_BOOT_CONTEXT,
+			})
 
 			apiDoc.paths[`/${table}/`] = {
 				post: <any>{
@@ -460,7 +640,7 @@ export class Documentation {
 	 * Convert Llana schema to OpenAPI schema
 	 */
 
-	convertSchemaToOpenAPIBodyRequest(schema: DataSourceSchema): object {
+	convertSchemaToOpenAPIBodyRequest(schema: DataSourceDefinition): object {
 		let columns = schema.columns
 
 		columns = schema.columns.filter(column => column.field !== schema.primary_key)
@@ -478,7 +658,7 @@ export class Documentation {
 	 * Convert Llana schema to OpenAPI schema
 	 */
 
-	convertSchemaToOpenAPIExample(schema: DataSourceSchema): object {
+	convertSchemaToOpenAPIExample(schema: DataSourceDefinition): object {
 		let columns = schema.columns
 
 		return columns.reduce((acc, column) => {
@@ -491,7 +671,7 @@ export class Documentation {
 	 * Convert Llana schema required fields to OpenAPI schema
 	 */
 
-	convertSchemaRequiredToOpenAPI(schema: DataSourceSchema): string[] {
+	convertSchemaRequiredToOpenAPI(schema: DataSourceDefinition): string[] {
 		return schema.columns.filter(column => column.required).map(column => column.field)
 	}
 
@@ -499,7 +679,7 @@ export class Documentation {
 	 * Convert Llana schema to OpenAPI schema
 	 */
 
-	convertSchemaToOpenAPISchema(schema: DataSourceSchema): OpenAPIV3_1.SchemaObject {
+	convertSchemaToOpenAPISchema(schema: DataSourceDefinition): OpenAPIV3_1.SchemaObject {
 		const openapiSchema = schema.columns.reduce((acc, column) => {
 			acc[column.field] = {
 				type: column.type,
@@ -535,7 +715,7 @@ export class Documentation {
 		}
 	}
 
-	getListRequestBody(schema: DataSourceSchema): OpenAPIV3_1.RequestBodyObject {
+	getListRequestBody(schema: DataSourceDefinition): OpenAPIV3_1.RequestBodyObject {
 		const properties = {}
 
 		for (const column of schema.columns) {
@@ -615,7 +795,7 @@ export class Documentation {
 		}
 	}
 
-	getSingleRequestBody(schema: DataSourceSchema): OpenAPIV3_1.RequestBodyObject {
+	getSingleRequestBody(schema: DataSourceDefinition): OpenAPIV3_1.RequestBodyObject {
 		return {
 			content: {
 				'application/json': {

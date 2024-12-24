@@ -14,17 +14,17 @@ import {
 	NON_RELATIONAL_DBS,
 	WEBHOOK_LOG_DAYS,
 } from './app.constants'
-import { FindManyResponseObject, ListTablesResponseObject } from './dtos/response.dto'
+import { FindManyResponseObject, ListTablesResponseObject, ListViewsResponseObject } from './dtos/response.dto'
 import { Authentication } from './helpers/Authentication'
+import { Definition } from './helpers/Definition'
 import { Documentation } from './helpers/Documentation'
 import { Logger } from './helpers/Logger'
 import { Query } from './helpers/Query'
-import { Schema } from './helpers/Schema'
 import { AuthType } from './types/auth.types'
 import {
 	ColumnExtraNumber,
 	DataSourceColumnType,
-	DataSourceSchema,
+	DataSourceDefinition,
 	PublishType,
 	QueryPerform,
 	WhereOperator,
@@ -41,7 +41,7 @@ export class AppBootup implements OnApplicationBootstrap {
 		private readonly documentation: Documentation,
 		private readonly logger: Logger,
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly schema: Definition,
 	) {}
 
 	async onApplicationBootstrap() {
@@ -63,13 +63,34 @@ export class AppBootup implements OnApplicationBootstrap {
 			throw new Error('Database Connection Error')
 		}
 
-		const database = (await this.query.perform(
+		const defaultSchema = await this.query.getDefaultSchema({})
+		console.log('DEFAULT SCHEMA:', defaultSchema)
+
+		const database_tables = (await this.query.perform(
 			QueryPerform.LIST_TABLES,
 			{ include_system: true },
 			APP_BOOT_CONTEXT,
 		)) as ListTablesResponseObject
 
-		if (!database.tables.includes(LLANA_AUTH_TABLE)) {
+		const tableToSkip = (this.configService.get<string>('TABLES_TO_SKIP') || '').split(',')
+
+		if (tableToSkip.length > 0) {
+			this.logger.log(`Skipping Tables: ${tableToSkip.join(',')}`)
+			database_tables.tables = database_tables.tables.filter(item => !tableToSkip.includes(item.name))
+
+			const tableToSkipByPrefix = tableToSkip.filter(name => name.endsWith(`*`))
+
+			for (const p of tableToSkipByPrefix) {
+				database_tables.tables = database_tables.tables.filter(
+					item => item.name.substring(0, p.length - 1) !== p.substring(0, p.length - 1),
+				)
+			}
+
+			console.log('TABLES')
+			console.log(database_tables.tables)
+		}
+
+		if (!database_tables.tables.map(item => item.name).includes(LLANA_AUTH_TABLE)) {
 			this.logger.log(`Creating ${LLANA_AUTH_TABLE} schema as it does not exist`, APP_BOOT_CONTEXT)
 
 			/**
@@ -83,8 +104,9 @@ export class AppBootup implements OnApplicationBootstrap {
 			 * |`public_records` | `enum` | The permission level if `EXCLUDE` and opened to the public, either `NONE` `READ` `WRITE` `DELETE`|
 			 */
 
-			const schema: DataSourceSchema = {
+			const schema: DataSourceDefinition = {
 				table: LLANA_AUTH_TABLE,
+				schema: defaultSchema,
 				primary_key: 'id',
 				columns: [
 					{
@@ -142,7 +164,11 @@ export class AppBootup implements OnApplicationBootstrap {
 				],
 			}
 
-			const created = await this.query.perform(QueryPerform.CREATE_TABLE, { schema }, APP_BOOT_CONTEXT)
+			const created = await this.query.perform(
+				QueryPerform.CREATE_TABLE,
+				{ definition: schema },
+				APP_BOOT_CONTEXT,
+			)
 
 			if (!created) {
 				throw new Error(`Failed to create ${LLANA_AUTH_TABLE} table`)
@@ -170,7 +196,7 @@ export class AppBootup implements OnApplicationBootstrap {
 					await this.query.perform(
 						QueryPerform.CREATE,
 						{
-							schema,
+							definition: schema,
 							data: example,
 						},
 						APP_BOOT_CONTEXT,
@@ -179,7 +205,7 @@ export class AppBootup implements OnApplicationBootstrap {
 			}
 		}
 
-		if (!database.tables.includes(LLANA_ROLES_TABLE)) {
+		if (!database_tables.tables.map(item => item.name).includes(LLANA_ROLES_TABLE)) {
 			this.logger.log(`Creating ${LLANA_ROLES_TABLE} schema as it does not exist`, APP_BOOT_CONTEXT)
 
 			/**
@@ -195,8 +221,9 @@ export class AppBootup implements OnApplicationBootstrap {
 			 * |`own_records` | `enum` | The permission level for this role if it includes a reference back to the user identity (their own records) either `NONE` `READ` `WRITE` `DELETE`|
 			 */
 
-			const schema: DataSourceSchema = {
+			const schema: DataSourceDefinition = {
 				table: LLANA_ROLES_TABLE,
+				schema: defaultSchema,
 				primary_key: 'id',
 				columns: [
 					{
@@ -271,7 +298,11 @@ export class AppBootup implements OnApplicationBootstrap {
 				],
 			}
 
-			const created = await this.query.perform(QueryPerform.CREATE_TABLE, { schema }, APP_BOOT_CONTEXT)
+			const created = await this.query.perform(
+				QueryPerform.CREATE_TABLE,
+				{ definition: schema },
+				APP_BOOT_CONTEXT,
+			)
 
 			if (!created) {
 				throw new Error('Failed to create _llana_roles table')
@@ -350,7 +381,7 @@ export class AppBootup implements OnApplicationBootstrap {
 					await this.query.perform(
 						QueryPerform.CREATE,
 						{
-							schema,
+							definition: schema,
 							data: default_role,
 						},
 						APP_BOOT_CONTEXT,
@@ -361,7 +392,7 @@ export class AppBootup implements OnApplicationBootstrap {
 					await this.query.perform(
 						QueryPerform.CREATE,
 						{
-							schema,
+							definition: schema,
 							data: custom_role,
 						},
 						APP_BOOT_CONTEXT,
@@ -371,13 +402,14 @@ export class AppBootup implements OnApplicationBootstrap {
 		}
 
 		if (
-			!database.tables.includes(LLANA_RELATION_TABLE) &&
+			!database_tables.tables.map(item => item.name).includes(LLANA_RELATION_TABLE) &&
 			NON_RELATIONAL_DBS.includes(this.configService.get('database.type'))
 		) {
 			this.logger.log(`Creating ${LLANA_RELATION_TABLE} schema as it does not exist`, APP_BOOT_CONTEXT)
 
-			const schema: DataSourceSchema = {
+			const schema: DataSourceDefinition = {
 				table: LLANA_RELATION_TABLE,
+				schema: defaultSchema,
 				primary_key: 'id',
 				columns: [
 					{
@@ -432,7 +464,11 @@ export class AppBootup implements OnApplicationBootstrap {
 				],
 			}
 
-			const created = await this.query.perform(QueryPerform.CREATE_TABLE, { schema }, APP_BOOT_CONTEXT)
+			const created = await this.query.perform(
+				QueryPerform.CREATE_TABLE,
+				{ definition: schema },
+				APP_BOOT_CONTEXT,
+			)
 
 			if (!created) {
 				throw new Error(`Failed to create ${LLANA_RELATION_TABLE} table`)
@@ -442,15 +478,16 @@ export class AppBootup implements OnApplicationBootstrap {
 		// Check if _llana_webhook table exists
 
 		if (!this.configService.get<boolean>('DISABLE_WEBHOOKS')) {
-			if (!database.tables.includes(LLANA_WEBHOOK_TABLE)) {
+			if (!database_tables.tables.map(item => item.name).includes(LLANA_WEBHOOK_TABLE)) {
 				this.logger.log(`Creating ${LLANA_WEBHOOK_TABLE} schema as it does not exist`, APP_BOOT_CONTEXT)
 
 				/**
 				 * Create the _llana_webhook schema
 				 */
 
-				const schema: DataSourceSchema = {
+				const schema: DataSourceDefinition = {
 					table: LLANA_WEBHOOK_TABLE,
+					schema: defaultSchema,
 					primary_key: 'id',
 					columns: [
 						{
@@ -550,7 +587,11 @@ export class AppBootup implements OnApplicationBootstrap {
 					})
 				}
 
-				const created = await this.query.perform(QueryPerform.CREATE_TABLE, { schema }, APP_BOOT_CONTEXT)
+				const created = await this.query.perform(
+					QueryPerform.CREATE_TABLE,
+					{ definition: schema },
+					APP_BOOT_CONTEXT,
+				)
 
 				if (!created) {
 					throw new Error('Failed to create _llana_webhook table')
@@ -561,7 +602,9 @@ export class AppBootup implements OnApplicationBootstrap {
 
 			try {
 				const schema = await this.schema.getSchema({
-					table: LLANA_WEBHOOK_LOG_TABLE,
+					tableOrView: LLANA_WEBHOOK_LOG_TABLE,
+					schema: defaultSchema,
+					isView: false,
 					x_request_id: APP_BOOT_CONTEXT,
 				})
 
@@ -570,7 +613,7 @@ export class AppBootup implements OnApplicationBootstrap {
 				const minusXdays = new Date()
 				minusXdays.setDate(minusXdays.getDate() - log_days)
 				const records = (await this.query.perform(QueryPerform.FIND_MANY, {
-					schema,
+					definition: schema,
 					fields: [schema.primary_key],
 					where: [{ column: 'created_at', operator: WhereOperator.lt, value: minusXdays.toISOString() }],
 					limit: 99999,
@@ -580,7 +623,7 @@ export class AppBootup implements OnApplicationBootstrap {
 					for (const record of records.data) {
 						await this.query.perform(
 							QueryPerform.DELETE,
-							{ schema, id: record[schema.primary_key] },
+							{ definition: schema, id: record[schema.primary_key] },
 							APP_BOOT_CONTEXT,
 						)
 					}
@@ -599,8 +642,9 @@ export class AppBootup implements OnApplicationBootstrap {
 				 * Create the _llana_webhook_log schema
 				 */
 
-				const schema: DataSourceSchema = {
+				const definition: DataSourceDefinition = {
 					table: LLANA_WEBHOOK_LOG_TABLE,
+					schema: defaultSchema,
 					primary_key: 'id',
 					columns: [
 						{
@@ -746,6 +790,7 @@ export class AppBootup implements OnApplicationBootstrap {
 					relations: [
 						{
 							table: LLANA_WEBHOOK_LOG_TABLE,
+							schema: defaultSchema,
 							column: 'webhook_id',
 							org_table: LLANA_WEBHOOK_TABLE,
 							org_column: 'id',
@@ -753,7 +798,11 @@ export class AppBootup implements OnApplicationBootstrap {
 					],
 				}
 
-				const created = await this.query.perform(QueryPerform.CREATE_TABLE, { schema }, APP_BOOT_CONTEXT)
+				const created = await this.query.perform(
+					QueryPerform.CREATE_TABLE,
+					{ definition: definition },
+					APP_BOOT_CONTEXT,
+				)
 
 				if (!created) {
 					throw new Error('Failed to create _llana_webhook_log table')
@@ -770,10 +819,42 @@ export class AppBootup implements OnApplicationBootstrap {
 			)
 		}
 
+		const database_views = (await this.query.perform(
+			QueryPerform.LIST_VIEWS,
+			{ include_system: true },
+			APP_BOOT_CONTEXT,
+		)) as ListViewsResponseObject
+
+		console.log('VIEWS')
+		console.log(database_views.views)
+
+		const viewToSkip = (this.configService.get<string>('VIEWS_TO_SKIP') || '').split(',').filter(v => v !== '')
+
+		if (viewToSkip.length > 0) {
+			this.logger.log(`Skipping Views: ${viewToSkip.join(',')}`)
+			database_views.views = database_views.views.filter(item => !viewToSkip.includes(item.name))
+
+			const viewToSkipByPrefix = viewToSkip.filter(name => name.endsWith(`*`))
+
+			for (const p of viewToSkipByPrefix) {
+				database_views.views = database_views.views.filter(
+					item => item.name.substring(0, p.length - 1) !== p.substring(0, p.length - 1),
+				)
+			}
+			console.log('--------------------------------------------')
+			console.log('VIEWS')
+			console.log('--------------------------------------------')
+			console.log(database_views.views)
+		}
+
 		if (this.documentation.skipDocs()) {
 			this.logger.warn('Skipping docs is set to true', APP_BOOT_CONTEXT)
 		} else {
-			const docs = await this.documentation.generateDocumentation()
+			const docs = await this.documentation.generateDocumentation(
+				database_tables.tables,
+				database_views.views,
+				defaultSchema,
+			)
 
 			//write docs to file to be consumed by the UI
 

@@ -24,6 +24,8 @@ export enum QueryPerform {
 	CREATE_TABLE = 'createTable',
 	CHECK_CONNECTION = 'checkConnection',
 	LIST_TABLES = 'listTables',
+	LIST_VIEWS = 'listViews',
+	//DEFAULT_SCHEMA = 'defaultSchema',
 }
 
 export enum PublishType {
@@ -93,8 +95,9 @@ export interface ChartResult {
 	time_interval: Date
 }
 
-export interface DataSourceSchema {
+export interface DataSourceDefinition {
 	table: string
+	schema: string
 	primary_key: string
 	columns: DataSourceSchemaColumn[]
 	relations?: DataSourceSchemaRelation[]
@@ -127,13 +130,14 @@ export interface DataSourceSchemaColumn {
 
 export interface DataSourceSchemaRelation {
 	table: string
+	schema: string
 	column: string
 	org_table: string
 	org_column: string
 }
 
 export interface DataSourceCreateOneOptions {
-	schema: DataSourceSchema
+	definition: DataSourceDefinition
 	data: object
 }
 
@@ -146,7 +150,7 @@ export interface DataSourceRelations {
 	join: DataSourceJoin
 	columns?: string[]
 	where?: DataSourceWhere
-	schema: DataSourceSchema
+	definition: DataSourceDefinition
 }
 
 export interface DataSourceFindOneOptions extends DataSourceFindOptions {}
@@ -158,7 +162,7 @@ export interface DataSourceFindManyOptions extends DataSourceFindOptions {
 }
 
 export interface DataSourceFindOptions {
-	schema: DataSourceSchema
+	definition: DataSourceDefinition
 	fields?: string[]
 	where?: DataSourceWhere[]
 	relations?: DataSourceRelations[]
@@ -166,18 +170,18 @@ export interface DataSourceFindOptions {
 
 export interface DataSourceUpdateOneOptions {
 	id: string
-	schema: DataSourceSchema
+	definition: DataSourceDefinition
 	data: object
 }
 
 export interface DataSourceDeleteOneOptions {
 	id: string
-	schema: DataSourceSchema
+	definition: DataSourceDefinition
 	softDelete?: string // Soft delete column
 }
 
 export interface DataSourceFindTotalRecords {
-	schema: DataSourceSchema
+	definition: DataSourceDefinition
 	where?: DataSourceWhere[]
 }
 
@@ -196,7 +200,7 @@ export interface DataSourceConfig {
 }
 
 export interface DataSourceUniqueCheckOptions {
-	schema: DataSourceSchema
+	definition: DataSourceDefinition
 	data: {
 		[key: string]: string | number | boolean
 	}
@@ -210,14 +214,14 @@ export interface DataSourceListTablesOptions {
 }
 
 export interface DataSourceInterface {
-	createTable(schema: DataSourceSchema): Promise<void>
+	createTable(schema: DataSourceDefinition): Promise<void>
 	findOne(options: DataSourceFindOneOptions): Promise<any>
 	findMany(options: DataSourceFindManyOptions): Promise<any[]>
 	createOne(options: DataSourceCreateOneOptions): Promise<any>
 	updateOne(options: DataSourceUpdateOneOptions): Promise<any>
 	deleteOne(options: DataSourceDeleteOneOptions): Promise<void>
 	uniqueCheck(options: DataSourceUniqueCheckOptions): Promise<boolean>
-	truncate(schema: DataSourceSchema): Promise<void>
+	truncate(schema: DataSourceDefinition): Promise<void>
 	checkConnection(): Promise<boolean>
 	listTables(): Promise<string[]>
 }

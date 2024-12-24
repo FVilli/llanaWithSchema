@@ -7,17 +7,18 @@ import {
 	FindManyResponseObject,
 	FindOneResponseObject,
 	IsUniqueResponse,
+	Item,
 } from '../dtos/response.dto'
 import { Logger } from '../helpers/Logger'
 import { Pagination } from '../helpers/Pagination'
 import {
 	DataSourceColumnType,
 	DataSourceCreateOneOptions,
+	DataSourceDefinition,
 	DataSourceDeleteOneOptions,
 	DataSourceFindManyOptions,
 	DataSourceFindOneOptions,
 	DataSourceFindTotalRecords,
-	DataSourceSchema,
 	DataSourceSchemaColumn,
 	DataSourceSchemaRelation,
 	DataSourceType,
@@ -110,20 +111,70 @@ export class Postgres {
 	}
 
 	/**
+	 * Get Default Schema
+	 */
+
+	async getDefaultSchema(options: { x_request_id?: string }): Promise<string> {
+		try {
+			const results = await this.performQuery({
+				sql: `SELECT setting FROM pg_settings WHERE name = 'search_path';`,
+				x_request_id: options.x_request_id,
+			})
+			return (
+				(results.map(row => row.setting)[0] || '').split(',').filter(i => i.indexOf('$user') < 0)[0] || ''
+			).trim()
+		} catch (e) {
+			this.logger.error(`[${DATABASE_TYPE}] Error getting default schema - ${e.message}`, options.x_request_id)
+			return null
+		}
+	}
+
+	/**
 	 * List all tables in the database
 	 */
 
-	async listTables(options: { x_request_id?: string }): Promise<string[]> {
+	async listTables(options: { x_request_id?: string }): Promise<Item[]> {
 		try {
+			const schemasToSkip = (this.configService.get<string>('SCHEMAS_TO_SKIP') || '').split(',')
+			schemasToSkip.push('pg_catalog')
+			schemasToSkip.push('information_schema')
+			const schemas: string = schemasToSkip.map(item => `'${item}'`).join(',')
 			const results = await this.performQuery({
-				sql: "SELECT * FROM pg_catalog.pg_tables WHERE schemaname != 'pg_catalog' AND schemaname != 'information_schema';",
+				sql: `SELECT * FROM pg_catalog.pg_tables WHERE schemaname NOT IN (${schemas})`,
 				x_request_id: options.x_request_id,
 			})
-			const tables = results.map((table: any) => table.tablename)
+			const tables: Item[] = results.map((table: any) => {
+				return { name: table.tablename, schema: table.schemaname }
+			})
 			this.logger.debug(`[${DATABASE_TYPE}] Tables: ${tables}`, options.x_request_id)
 			return tables
 		} catch (e) {
 			this.logger.error(`[${DATABASE_TYPE}] Error listing tables`, options.x_request_id)
+			throw new Error(e)
+		}
+	}
+
+	/**
+	 * List all views in the database
+	 */
+
+	async listViews(options: { x_request_id?: string }): Promise<Item[]> {
+		try {
+			const schemasToSkip = (this.configService.get<string>('SCHEMAS_TO_SKIP') || '').split(',')
+			schemasToSkip.push('pg_catalog')
+			schemasToSkip.push('information_schema')
+			const schemas: string = schemasToSkip.map(item => `'${item}'`).join(',')
+			const results = await this.performQuery({
+				sql: `SELECT * FROM pg_catalog.pg_views WHERE schemaname NOT IN (${schemas})`,
+				x_request_id: options.x_request_id,
+			})
+			const views = results.map((view: any) => {
+				return { name: view.viewname, schema: view.schemaname }
+			})
+			this.logger.debug(`[${DATABASE_TYPE}] Views: ${views}`, options.x_request_id)
+			return views
+		} catch (e) {
+			this.logger.error(`[${DATABASE_TYPE}] Error listing views`, options.x_request_id)
 			throw new Error(e)
 		}
 	}
@@ -134,14 +185,19 @@ export class Postgres {
 	 * @param table_name
 	 */
 
-	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceSchema> {
+	async getSchema(options: {
+		name: string
+		schema: string
+		isView: boolean
+		x_request_id?: string
+	}): Promise<DataSourceDefinition> {
 		let sql = `SELECT column_name AS "Field", data_type AS "Type", is_nullable AS "Null", column_default AS "Default",
 			CASE
 				WHEN column_name = ANY (SELECT kcu.column_name
 							  FROM information_schema.key_column_usage AS kcu
 							  JOIN information_schema.table_constraints AS tc
 							  ON kcu.constraint_name = tc.constraint_name
-							  WHERE kcu.table_name = '${options.table}' AND tc.constraint_type = 'PRIMARY KEY')
+							  WHERE kcu.table_name = '${options.name}' AND kcu.table_schema = '${options.schema}' AND tc.constraint_type = 'PRIMARY KEY')
 				THEN 'PRI'
 				ELSE ''
 			END AS "Key",
@@ -150,7 +206,7 @@ export class Postgres {
 							  FROM information_schema.key_column_usage AS kcu
 							  JOIN information_schema.table_constraints AS tc
 							  ON kcu.constraint_name = tc.constraint_name
-							  WHERE kcu.table_name = '${options.table}' AND tc.constraint_type = 'UNIQUE')
+							  WHERE kcu.table_name = '${options.name}' AND kcu.table_schema = '${options.schema}' AND tc.constraint_type = 'UNIQUE')
 				THEN 'UNI'
 				ELSE ''
 			END AS "Key_Unique",
@@ -159,12 +215,12 @@ export class Postgres {
 							  FROM information_schema.key_column_usage AS kcu
 							  JOIN information_schema.table_constraints AS tc
 							  ON kcu.constraint_name = tc.constraint_name
-							  WHERE kcu.table_name = '${options.table}' AND tc.constraint_type = 'FOREIGN KEY')
+							  WHERE kcu.table_name = '${options.name}' AND kcu.table_schema = '${options.schema}' AND tc.constraint_type = 'FOREIGN KEY')
 				THEN 'MUL'
 				ELSE ''
 			END AS "Key_Multiple",
 		'extra' AS "Extra"
-		FROM information_schema.columns WHERE table_name = '${options.table}'`
+		FROM information_schema.columns WHERE table_name = '${options.name}' AND table_schema = '${options.schema}'`
 
 		const columns_result = await this.performQuery({
 			sql: sql,
@@ -172,7 +228,7 @@ export class Postgres {
 		})
 
 		if (!columns_result.length) {
-			throw new Error(`Table ${options.table} does not exist`)
+			throw new Error(`Table ${options.name} does not exist`)
 		}
 
 		const columns = columns_result.map((column: any) => {
@@ -193,7 +249,7 @@ export class Postgres {
 		FROM information_schema.table_constraints AS tc
 		JOIN information_schema.key_column_usage AS kcu ON tc.constraint_name = kcu.constraint_name
 		JOIN information_schema.constraint_column_usage AS ccu ON ccu.constraint_name = tc.constraint_name
-		WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = '${options.table}';`
+		WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_name = '${options.name}' AND tc.table_schema = '${options.schema}';`
 
 		const relations_result = await this.performQuery({ sql: relations_query, x_request_id: options.x_request_id })
 
@@ -216,7 +272,8 @@ export class Postgres {
 		}
 
 		return {
-			table: options.table,
+			table: options.name,
+			schema: options.schema,
 			columns,
 			primary_key: columns.find(column => column.primary_key)?.field,
 			relations,
@@ -228,7 +285,7 @@ export class Postgres {
 	 */
 
 	async createOne(options: DataSourceCreateOneOptions, x_request_id?: string): Promise<FindOneResponseObject> {
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 		const values: any[] = []
 
 		options = this.pipeObjectToPostgres(options) as DataSourceCreateOneOptions
@@ -333,7 +390,7 @@ export class Postgres {
 	 */
 
 	async updateOne(options: DataSourceUpdateOneOptions, x_request_id: string): Promise<FindOneResponseObject> {
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 		let index = 1
 
 		const values = [...Object.values(options.data), options.id.toString()]
@@ -348,7 +405,7 @@ export class Postgres {
 
 		command = command.slice(0, -2)
 
-		command += ` WHERE "${options.schema.primary_key}" = $${index}`
+		command += ` WHERE "${options.definition.primary_key}" = $${index}`
 		command += ` RETURNING *`
 
 		const result = await this.performQuery({ sql: command, values, x_request_id })
@@ -364,7 +421,7 @@ export class Postgres {
 			const result = await this.updateOne(
 				{
 					id: options.id,
-					schema: options.schema,
+					definition: options.definition,
 					data: {
 						[options.softDelete]: new Date().toISOString().slice(0, 19).replace('T', ' '),
 					},
@@ -376,12 +433,12 @@ export class Postgres {
 				deleted: result ? 1 : 0,
 			}
 		} else {
-			const table_name = options.schema.table
+			const table_name = options.definition.table
 
 			const values = [options.id]
 			let command = `DELETE FROM "${table_name}" `
 
-			command += `WHERE "${options.schema.primary_key}" = $1 RETURNING *`
+			command += `WHERE "${options.definition.primary_key}" = $1 RETURNING *`
 
 			const result = await this.performQuery({ sql: command, values, x_request_id })
 
@@ -392,9 +449,9 @@ export class Postgres {
 	}
 
 	async uniqueCheck(options: DataSourceUniqueCheckOptions, x_request_id: string): Promise<IsUniqueResponse> {
-		for (const column of options.schema.columns) {
+		for (const column of options.definition.columns) {
 			if (column.unique_key) {
-				const command = `SELECT COUNT(*) as total FROM "${options.schema.table}" WHERE ${column.field} = $1`
+				const command = `SELECT COUNT(*) as total FROM "${options.definition.table}" WHERE ${column.field} = $1`
 				const result = await this.performQuery({
 					sql: command,
 					values: [options.data[column.field]],
@@ -419,7 +476,7 @@ export class Postgres {
 	 * Create table from schema object
 	 */
 
-	async createTable(schema: DataSourceSchema, x_request_id?: string): Promise<boolean> {
+	async createTable(schema: DataSourceDefinition, x_request_id?: string): Promise<boolean> {
 		try {
 			let command = `CREATE TABLE "${schema.table}" (`
 
@@ -493,7 +550,7 @@ export class Postgres {
 		options: DataSourceFindOneOptions | DataSourceFindManyOptions,
 		count: boolean = false,
 	): [string, any[]] {
-		const table_name = options.schema.table
+		const table_name = options.definition.table
 		let values: any[] = []
 		let index = 1
 
@@ -506,11 +563,11 @@ export class Postgres {
 
 			if (options.fields?.length) {
 				for (const f in options.fields) {
-					command += ` "${options.schema.table}"."${options.fields[f]}" as "${options.fields[f]}",`
+					command += ` "${options.definition.table}"."${options.fields[f]}" as "${options.fields[f]}",`
 				}
 				command = command.slice(0, -1)
 			} else {
-				command += ` "${options.schema.table}".* `
+				command += ` "${options.definition.table}".* `
 			}
 
 			if (options.relations?.length) {
@@ -648,7 +705,7 @@ export class Postgres {
 	private pipeObjectToPostgres(
 		options: DataSourceCreateOneOptions | DataSourceUpdateOneOptions,
 	): DataSourceCreateOneOptions | DataSourceUpdateOneOptions {
-		for (const column of options.schema.columns) {
+		for (const column of options.definition.columns) {
 			if (!options.data[column.field]) {
 				continue
 			}
@@ -683,9 +740,9 @@ export class Postgres {
 			if (key.includes('.')) {
 				const [table, field] = key.split('.')
 				const relation = options.relations.find(r => r.table === table)
-				data[key] = this.formatField(relation.schema.columns.find(c => c.field === field).type, data[key])
+				data[key] = this.formatField(relation.definition.columns.find(c => c.field === field).type, data[key])
 			} else {
-				const column = options.schema.columns.find(c => c.field === key)
+				const column = options.definition.columns.find(c => c.field === key)
 				data[key] = this.formatField(column.type, data[key])
 			}
 		}

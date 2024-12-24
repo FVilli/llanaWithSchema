@@ -6,7 +6,7 @@ import * as request from 'supertest'
 import { CustomerTestingService } from './testing/customer.testing.service'
 import { AppModule } from './app.module'
 import { AuthTestingService } from './testing/auth.testing.service'
-import { DataSourceSchema } from './types/datasource.types'
+import { DataSourceDefinition } from './types/datasource.types'
 import { UserTestingService } from './testing/user.testing.service'
 import { Logger } from './helpers/Logger'
 import { TIMEOUT } from './testing/testing.const'
@@ -29,8 +29,8 @@ describe('App > Controller > Post', () => {
 	let customerTestingService: CustomerTestingService
 	let userTestingService: UserTestingService
 
-	let customerSchema: DataSourceSchema
-	let userSchema: DataSourceSchema
+	let customerSchema: DataSourceDefinition
+	let userSchema: DataSourceDefinition
 
 	let customer1: any
 	let customer2: any
@@ -69,8 +69,8 @@ describe('App > Controller > Post', () => {
 		customerTestingService = app.get<CustomerTestingService>(CustomerTestingService)
 		userTestingService = app.get<UserTestingService>(UserTestingService)
 
-		customerSchema = await customerTestingService.getSchema()
-		userSchema = await userTestingService.getSchema()
+		customerSchema = await customerTestingService.getDef()
+		userSchema = await userTestingService.getDef()
 
 		jwt = await authTestingService.login()
 	}, TIMEOUT)

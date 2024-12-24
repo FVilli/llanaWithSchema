@@ -1,5 +1,5 @@
 import { CACHE_MANAGER } from '@nestjs/cache-manager'
-import { Inject, Injectable } from '@nestjs/common'
+import { Inject, Injectable, OnApplicationBootstrap } from '@nestjs/common'
 import { ConfigService } from '@nestjs/config'
 import { Cache } from 'cache-manager'
 import { plainToInstance } from 'class-transformer'
@@ -14,10 +14,10 @@ import { MySQL } from '../datasources/mysql.datasource'
 import { Postgres } from '../datasources/postgres.datasource'
 import {
 	DataSourceColumnType,
+	DataSourceDefinition,
 	DataSourceFindOneOptions,
 	DataSourceoinType,
 	DataSourceRelations,
-	DataSourceSchema,
 	DataSourceType,
 	DataSourceWhere,
 	WhereOperator,
@@ -32,7 +32,7 @@ import {
 import { Logger } from './Logger'
 
 @Injectable()
-export class Schema {
+export class Definition implements OnApplicationBootstrap {
 	constructor(
 		@Inject(CACHE_MANAGER) private cacheManager: Cache,
 		private readonly logger: Logger,
@@ -43,21 +43,58 @@ export class Schema {
 		private readonly mssql: MSSQL,
 		private readonly airtable: Airtable,
 	) {}
+	async onApplicationBootstrap() {}
+
+	async getDefinition(tableOrView: string, schema: string, x_request_id?: string): Promise<DataSourceDefinition> {
+		let tableDef: DataSourceDefinition
+		let viewDef: DataSourceDefinition
+
+		try {
+			tableDef = await this.getSchema({
+				tableOrView,
+				schema,
+				isView: false,
+				x_request_id,
+			})
+		} catch {}
+
+		if (!tableDef) {
+			try {
+				viewDef = await this.getSchema({
+					tableOrView: tableOrView,
+					schema: schema,
+					isView: true,
+					x_request_id,
+				})
+			} catch {}
+		}
+
+		return tableDef || viewDef
+	}
 
 	/**
 	 * Get Table Schema
 	 */
 
-	async getSchema(options: { table: string; x_request_id?: string }): Promise<DataSourceSchema> {
-		if (!options.table) {
+	async getSchema(options: {
+		tableOrView: string
+		schema: string
+		isView: boolean
+		x_request_id?: string
+	}): Promise<DataSourceDefinition> {
+		if (!options.tableOrView) {
 			throw new Error('Table name not provided')
 		}
 
 		//check cache for schema
-		let result: DataSourceSchema = await this.cacheManager.get(`schema:${options.table}`)
+		let result: DataSourceDefinition = await this.cacheManager.get(
+			`schema:${options.schema}.${options.tableOrView}`,
+		)
 
 		if (result?.table) {
-			this.logger.debug(`[GetSchema] Cache hit for ${options.table} ${options.x_request_id ?? ''}`)
+			this.logger.debug(
+				`[GetSchema] Cache hit for ${options.schema}.${options.tableOrView} ${options.x_request_id ?? ''}`,
+			)
 			return {
 				...result,
 				_x_request_id: options.x_request_id,
@@ -66,21 +103,26 @@ export class Schema {
 
 		try {
 			switch (this.configService.get<string>('database.type')) {
-				case DataSourceType.MYSQL:
-					result = await this.mysql.getSchema({ table: options.table, x_request_id: options.x_request_id })
-					break
+				// case DataSourceType.MYSQL:
+				// 	result = await this.mysql.getSchema({ table: options.table, x_request_id: options.x_request_id })
+				// 	break
 				case DataSourceType.POSTGRES:
-					result = await this.postgres.getSchema({ table: options.table, x_request_id: options.x_request_id })
+					result = await this.postgres.getSchema({
+						name: options.tableOrView,
+						schema: options.schema,
+						isView: options.isView,
+						x_request_id: options.x_request_id,
+					})
 					break
-				case DataSourceType.MONGODB:
-					result = await this.mongo.getSchema({ table: options.table, x_request_id: options.x_request_id })
-					break
-				case DataSourceType.MSSQL:
-					result = await this.mssql.getSchema({ table: options.table, x_request_id: options.x_request_id })
-					break
-				case DataSourceType.AIRTABLE:
-					result = await this.airtable.getSchema({ table: options.table, x_request_id: options.x_request_id })
-					break
+				// case DataSourceType.MONGODB:
+				// 	result = await this.mongo.getSchema({ table: options.table, x_request_id: options.x_request_id })
+				// 	break
+				// case DataSourceType.MSSQL:
+				// 	result = await this.mssql.getSchema({ table: options.table, x_request_id: options.x_request_id })
+				// 	break
+				// case DataSourceType.AIRTABLE:
+				// 	result = await this.airtable.getSchema({ table: options.table, x_request_id: options.x_request_id })
+				// 	break
 				default:
 					this.logger.error(
 						`[GetSchema] Database type ${this.configService.get<string>('database.type')} not supported yet`,
@@ -89,11 +131,11 @@ export class Schema {
 			}
 
 			if (!result?.table) {
-				throw new Error(`Schema not found for ${options.table}`)
+				throw new Error(`Schema not found for ${options.tableOrView}`)
 			}
 
 			await this.cacheManager.set(
-				`schema:${options.table}`,
+				`schema:${options.schema}.${options.tableOrView}`,
 				result,
 				this.configService.get<number>('CACHE_TABLE_SCHEMA_TTL') ?? CACHE_DEFAULT_TABLE_SCHEMA_TTL,
 			)
@@ -104,14 +146,14 @@ export class Schema {
 			}
 		} catch (e) {
 			this.logger.debug(`[GetSchema] ${e.message} ${options.x_request_id ?? ''}`)
-			throw new Error(`Error processing schema for ${options.table}`)
+			throw new Error(`Error processing schema for ${options.tableOrView}`)
 		}
 	}
 
 	/**
 	 * The primary key's name of the table
 	 */
-	getPrimaryKey(schema: DataSourceSchema): string {
+	getPrimaryKey(schema: DataSourceDefinition): string {
 		return schema.columns.find(column => {
 			if (column.primary_key) {
 				return column
@@ -123,7 +165,7 @@ export class Schema {
 	 * Get the class for the schema
 	 */
 
-	schemaToClass(schema: DataSourceSchema, data?: { [key: string]: any }): any {
+	schemaToClass(schema: DataSourceDefinition, data?: { [key: string]: any }): any {
 		class DynamicClass {}
 
 		for (const column of schema.columns) {
@@ -210,7 +252,7 @@ export class Schema {
 				if (isObject(nestedObject[key]) && !isDate(nestedObject[key])) {
 					const relation = options.relations?.find(col => col.table === key)
 					if (relation) {
-						const DynamicClass = this.schemaToClass(relation.schema, nestedObject[key])
+						const DynamicClass = this.schemaToClass(relation.definition, nestedObject[key])
 						const instance: object = plainToInstance(DynamicClass, nestedObject[key])
 						try {
 							const errors = await validate(instance)
@@ -239,7 +281,7 @@ export class Schema {
 			}
 		}
 
-		const DynamicClass = this.schemaToClass(options.schema, nestedObject)
+		const DynamicClass = this.schemaToClass(options.definition, nestedObject)
 		const instance: object = plainToInstance(DynamicClass, nestedObject)
 		try {
 			const errors = await validate(instance)
@@ -265,7 +307,7 @@ export class Schema {
 	 */
 
 	async validateData(
-		schema: DataSourceSchema,
+		schema: DataSourceDefinition,
 		data: { [key: string]: any },
 	): Promise<{ valid: boolean; message?: string; instance?: object }> {
 		try {
@@ -323,7 +365,7 @@ export class Schema {
 	}
 
 	async validateFields(options: {
-		schema: DataSourceSchema
+		schema: DataSourceDefinition
 		fields: string[]
 		x_request_id?: string
 	}): Promise<ValidateFieldsResponse> {
@@ -339,7 +381,7 @@ export class Schema {
 				if (field.includes('.')) {
 					relations = await this.convertDeepField({
 						field,
-						schema: options.schema,
+						definition: options.schema,
 						relations,
 						x_request_id: options.x_request_id,
 					})
@@ -369,7 +411,7 @@ export class Schema {
 		}
 	}
 
-	validateField(schema: DataSourceSchema, field: string): boolean {
+	validateField(schema: DataSourceDefinition, field: string): boolean {
 		return schema.columns.find(col => col.field === field) ? true : false
 	}
 
@@ -378,7 +420,7 @@ export class Schema {
 	 */
 
 	async validateRelations(options: {
-		schema: DataSourceSchema
+		definition: DataSourceDefinition
 		relation_query: string[]
 		existing_relations: DataSourceRelations[]
 		x_request_id?: string
@@ -391,7 +433,7 @@ export class Schema {
 				if (relation.includes('.')) {
 					const relations = await this.convertDeepRelation({
 						relation,
-						schema: options.schema,
+						definition: options.definition,
 						x_request_id: options.x_request_id,
 					})
 
@@ -402,10 +444,10 @@ export class Schema {
 						validated.push(rel)
 					}
 				} else {
-					if (!options.schema.relations.find(col => col.table === relation)) {
+					if (!options.definition.relations.find(col => col.table === relation)) {
 						return {
 							valid: false,
-							message: `Relation ${relation} not found in table schema for ${options.schema.table} `,
+							message: `Relation ${relation} not found in table schema for ${options.definition.table} `,
 						}
 					}
 
@@ -414,18 +456,20 @@ export class Schema {
 					}
 
 					const relation_schema = await this.getSchema({
-						table: relation,
+						tableOrView: relation,
+						schema: options.definition.schema,
+						isView: false,
 						x_request_id: options.x_request_id,
 					})
 
 					validated.push({
 						table: relation,
 						join: {
-							...options.schema.relations.find(col => col.table === relation),
+							...options.definition.relations.find(col => col.table === relation),
 							type: DataSourceoinType.INNER,
 						},
 						columns: relation_schema.columns.map(col => col.field),
-						schema: relation_schema,
+						definition: relation_schema,
 					})
 				}
 			}
@@ -449,7 +493,7 @@ export class Schema {
 	 * Example: ?id[equals]=1&name=John&age[gte]=21
 	 */
 
-	async validateWhereParams(options: { schema: DataSourceSchema; params: any }): Promise<validateWhereResponse> {
+	async validateWhereParams(options: { schema: DataSourceDefinition; params: any }): Promise<validateWhereResponse> {
 		const where: DataSourceWhere[] = []
 
 		for (const param in options.params) {
@@ -528,7 +572,7 @@ export class Schema {
 	 * Example: ?sort=name.asc,id.desc,content.title.asc
 	 */
 
-	validateSort(options: { schema: DataSourceSchema; sort: string[] }): ValidateSortResponse {
+	validateSort(options: { schema: DataSourceDefinition; sort: string[] }): ValidateSortResponse {
 		const array = options.sort?.filter(sort => !sort.includes('.'))
 
 		for (const item of array) {
@@ -572,7 +616,7 @@ export class Schema {
 
 	async convertDeepWhere(options: {
 		where: DataSourceWhere
-		schema: DataSourceSchema
+		definition: DataSourceDefinition
 		x_request_id?: string
 	}): Promise<DataSourceRelations[]> {
 		const relations: DataSourceRelations[] = []
@@ -581,30 +625,35 @@ export class Schema {
 		let items = options.where.column.split('.')
 
 		for (let i = 0; i < items.length - 1; i++) {
-			if (!options.schema.relations.find(col => col.table === items[i])) {
+			if (!options.definition.relations.find(col => col.table === items[i])) {
 				this.logger.error(
-					`Relation ${items[i]} not found in schema for ${options.schema.table}`,
+					`Relation ${items[i]} not found in schema for ${options.definition.table}`,
 					options.x_request_id,
 				)
 				this.logger.error(options)
-				throw new Error(`Relation ${items[i]} not found in schema for ${options.schema.table}`)
+				throw new Error(`Relation ${items[i]} not found in schema for ${options.definition.table}`)
 			}
 
-			const relation_schema = await this.getSchema({ table: items[i], x_request_id: options.x_request_id })
+			const relation_schema = await this.getSchema({
+				tableOrView: items[i],
+				schema: options.definition.schema,
+				isView: false,
+				x_request_id: options.x_request_id,
+			})
 
 			const relation = {
 				table: items[i],
 				join: {
-					...options.schema.relations.find(col => col.table === items[i]),
+					...options.definition.relations.find(col => col.table === items[i]),
 					type: DataSourceoinType.INNER,
 				},
 				where: i === items.length - 2 ? options.where : undefined,
-				schema: relation_schema,
+				definition: relation_schema,
 			}
 
 			relations.push(relation)
 
-			options.schema = relation_schema
+			options.definition = relation_schema
 		}
 
 		return relations
@@ -616,7 +665,7 @@ export class Schema {
 
 	async convertDeepField(options: {
 		field: string
-		schema: DataSourceSchema
+		definition: DataSourceDefinition
 		relations: DataSourceRelations[]
 		x_request_id?: string
 	}): Promise<DataSourceRelations[]> {
@@ -624,16 +673,21 @@ export class Schema {
 		let items = options.field.split('.')
 
 		for (let i = 0; i < items.length - 1; i++) {
-			if (!options.schema.relations.find(col => col.table === items[i])) {
+			if (!options.definition.relations.find(col => col.table === items[i])) {
 				this.logger.error(
-					`Relation ${items[i]} not found in schema for ${options.schema.table}`,
+					`Relation ${items[i]} not found in schema for ${options.definition.table}`,
 					options.x_request_id,
 				)
 				this.logger.error(options)
-				throw new Error(`Relation ${items[i]} not found in schema for ${options.schema.table}`)
+				throw new Error(`Relation ${items[i]} not found in schema for ${options.definition.table}`)
 			}
 
-			const relation_schema = await this.getSchema({ table: items[i], x_request_id: options.x_request_id })
+			const relation_schema = await this.getSchema({
+				tableOrView: items[i],
+				schema: options.definition.schema,
+				isView: false,
+				x_request_id: options.x_request_id,
+			})
 
 			if (options.relations.find(rel => rel.table === items[i])) {
 				const index = options.relations.findIndex(rel => rel.table === items[i])
@@ -644,15 +698,15 @@ export class Schema {
 				options.relations.push({
 					table: items[i],
 					join: {
-						...options.schema.relations.find(col => col.table === items[i]),
+						...options.definition.relations.find(col => col.table === items[i]),
 						type: DataSourceoinType.INNER,
 					},
 					columns: i === items.length - 2 ? [items[items.length - 1]] : undefined,
-					schema: relation_schema,
+					definition: relation_schema,
 				})
 			}
 
-			options.schema = relation_schema
+			options.definition = relation_schema
 		}
 
 		return options.relations
@@ -664,7 +718,7 @@ export class Schema {
 
 	async convertDeepRelation(options: {
 		relation: string
-		schema: DataSourceSchema
+		definition: DataSourceDefinition
 		x_request_id?: string
 	}): Promise<DataSourceRelations[]> {
 		const relations: DataSourceRelations[] = []
@@ -673,28 +727,33 @@ export class Schema {
 		let items = options.relation.split('.')
 
 		for (let i = 0; i < items.length - 1; i++) {
-			if (!options.schema.relations.find(col => col.table === items[i])) {
+			if (!options.definition.relations.find(col => col.table === items[i])) {
 				this.logger.error(
-					`Relation ${items[i]} not found in schema for ${options.schema.table}`,
+					`Relation ${items[i]} not found in schema for ${options.definition.table}`,
 					options.x_request_id,
 				)
 				this.logger.error(options)
-				throw new Error(`Relation ${items[i]} not found in schema for ${options.schema.table}`)
+				throw new Error(`Relation ${items[i]} not found in schema for ${options.definition.table}`)
 			}
 
-			const relation_schema = await this.getSchema({ table: items[i], x_request_id: options.x_request_id })
+			const relation_schema = await this.getSchema({
+				tableOrView: items[i],
+				schema: options.definition.schema,
+				isView: false,
+				x_request_id: options.x_request_id,
+			})
 
 			relations.push({
 				table: items[i],
 				join: {
-					...options.schema.relations.find(col => col.table === items[i]),
+					...options.definition.relations.find(col => col.table === items[i]),
 					type: DataSourceoinType.INNER,
 				},
 				columns: i === items.length - 1 ? [items[items.length]] : undefined,
-				schema: relation_schema,
+				definition: relation_schema,
 			})
 
-			options.schema = relation_schema
+			options.definition = relation_schema
 		}
 
 		return relations

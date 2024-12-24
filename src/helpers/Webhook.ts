@@ -8,12 +8,12 @@ import { CACHE_DEFAULT_WEBHOOK_TTL, LLANA_WEBHOOK_LOG_TABLE, LLANA_WEBHOOK_TABLE
 import { FindManyResponseObject, FindOneResponseObject } from '../dtos/response.dto'
 import { WebhookLog } from '../dtos/webhook.dto'
 import { Webhook as WebhookType } from '../dtos/webhook.dto'
-import { DataSourceSchema, PublishType, QueryPerform, WhereOperator } from '../types/datasource.types'
+import { DataSourceDefinition, PublishType, QueryPerform, WhereOperator } from '../types/datasource.types'
 import { RolePermission } from '../types/roles.types'
 import { Authentication } from './Authentication'
+import { Definition } from './Definition'
 import { Logger } from './Logger'
 import { Query } from './Query'
-import { Schema } from './Schema'
 
 @Injectable()
 export class Webhook {
@@ -23,23 +23,24 @@ export class Webhook {
 		private readonly configService: ConfigService,
 		private readonly logger: Logger,
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 	) {}
 
 	async publish(
-		schema: DataSourceSchema,
+		schema: DataSourceDefinition,
 		type: PublishType,
 		id: string | number,
 		user_identifier?: string | number,
 	): Promise<void> {
-		if (this.configService.get<boolean>('DISABLE_WEBHOOKS')) {
-			return
-		}
+		if (this.configService.get<boolean>('DISABLE_WEBHOOKS')) return
 
 		this.logger.debug(`[Webhook] Publishing ${schema.table} ${type} for #${id}`)
 
-		const webhookSchema = await this.schema.getSchema({ table: LLANA_WEBHOOK_TABLE })
-		const webhookLogSchema = await this.schema.getSchema({ table: LLANA_WEBHOOK_LOG_TABLE })
+		const webhookDefinition = await this.definition.getDefinition(LLANA_WEBHOOK_TABLE, this.query.defaultSchema)
+		const webhookLogDefinition = await this.definition.getDefinition(
+			LLANA_WEBHOOK_LOG_TABLE,
+			this.query.defaultSchema,
+		)
 
 		const webhooksWhere = [
 			{
@@ -53,7 +54,7 @@ export class Webhook {
 
 		if (!webhooks) {
 			webhooks = (await this.query.perform(QueryPerform.FIND_MANY, {
-				schema: webhookSchema,
+				definition: webhookDefinition,
 				where: [
 					...webhooksWhere,
 					{
@@ -77,7 +78,7 @@ export class Webhook {
 
 			if (!webhooksUser) {
 				webhooksUser = (await this.query.perform(QueryPerform.FIND_MANY, {
-					schema: webhookSchema,
+					definition: webhookDefinition,
 					where: [
 						...webhooksWhere,
 						{
@@ -102,6 +103,7 @@ export class Webhook {
 			if (user_identifier) {
 				const auth = await this.authentication.auth({
 					table: schema.table,
+					schema: this.query.defaultSchema,
 					access: RolePermission.READ,
 					user_identifier: user_identifier.toString(),
 				})
@@ -112,7 +114,7 @@ export class Webhook {
 			}
 
 			await this.query.perform(QueryPerform.CREATE, {
-				schema: webhookLogSchema,
+				definition: webhookLogDefinition,
 				data: <WebhookLog>{
 					webhook_id: webhook.id,
 					type,
@@ -130,9 +132,12 @@ export class Webhook {
 			return
 		}
 
-		const webhookLogSchema = await this.schema.getSchema({ table: LLANA_WEBHOOK_LOG_TABLE })
+		const webhookLogDefinition = await this.definition.getDefinition(
+			LLANA_WEBHOOK_LOG_TABLE,
+			this.query.defaultSchema,
+		)
 		const webhooks = (await this.query.perform(QueryPerform.FIND_MANY, {
-			schema: webhookLogSchema,
+			definition: webhookLogDefinition,
 			where: [
 				{
 					column: 'delivered',
@@ -156,7 +161,10 @@ export class Webhook {
 			return
 		}
 
-		const webhookLogSchema = await this.schema.getSchema({ table: LLANA_WEBHOOK_LOG_TABLE })
+		const webhookLogDefinition = await this.definition.getDefinition(
+			LLANA_WEBHOOK_LOG_TABLE,
+			this.query.defaultSchema,
+		)
 
 		try {
 			const response = await axios({
@@ -171,7 +179,7 @@ export class Webhook {
 
 			await this.query.perform(QueryPerform.UPDATE, {
 				id: webhook.id.toString(),
-				schema: webhookLogSchema,
+				definition: webhookLogDefinition,
 				data: <Partial<WebhookLog>>{
 					response_status: response.status,
 					response_message: response.statusText,
@@ -193,7 +201,7 @@ export class Webhook {
 
 			await this.query.perform(QueryPerform.UPDATE, {
 				id: webhook.id.toString(),
-				schema: webhookLogSchema,
+				definition: webhookLogDefinition,
 				data: <Partial<WebhookLog>>{
 					attempt: webhook.attempt + 1,
 					next_attempt_at: next_attempt_at,
@@ -205,9 +213,9 @@ export class Webhook {
 	}
 
 	async addWebhook(data: Partial<WebhookType>): Promise<FindOneResponseObject> {
-		const schema = await this.schema.getSchema({ table: LLANA_WEBHOOK_TABLE })
+		const definition = await this.definition.getDefinition(LLANA_WEBHOOK_TABLE, this.query.defaultSchema)
 		const result = (await this.query.perform(QueryPerform.CREATE, {
-			schema,
+			definition: definition,
 			data,
 		})) as FindOneResponseObject
 		await this.cacheManager.del(`webhooks:${data.table}:*`)
@@ -215,9 +223,9 @@ export class Webhook {
 	}
 
 	async editWebhook(id: string, data: Partial<WebhookType>): Promise<FindOneResponseObject> {
-		const schema = await this.schema.getSchema({ table: LLANA_WEBHOOK_TABLE })
+		const definition = await this.definition.getDefinition(LLANA_WEBHOOK_TABLE, this.query.defaultSchema)
 		const result = (await this.query.perform(QueryPerform.UPDATE, {
-			schema,
+			definition: definition,
 			where: [
 				{
 					column: 'id',
@@ -232,9 +240,9 @@ export class Webhook {
 	}
 
 	async deleteWebhook(id: string): Promise<void> {
-		const schema = await this.schema.getSchema({ table: LLANA_WEBHOOK_TABLE })
+		const definition = await this.definition.getDefinition(LLANA_WEBHOOK_TABLE, this.query.defaultSchema)
 		const webhook = (await this.query.perform(QueryPerform.FIND_ONE, {
-			schema,
+			definition: definition,
 			where: [
 				{
 					column: 'id',
@@ -249,7 +257,7 @@ export class Webhook {
 		}
 
 		await this.query.perform(QueryPerform.DELETE, {
-			schema,
+			definition: definition,
 			where: [
 				{
 					column: 'id',

@@ -4,7 +4,7 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager'
 import { Cache } from 'cache-manager'
 import { JwtService } from '@nestjs/jwt'
 import { Query } from './Query'
-import { Schema } from './Schema'
+import { Definition } from './Definition'
 import { Roles } from './Roles'
 import { RolePermission } from '../types/roles.types'
 import { Logger } from './Logger'
@@ -19,7 +19,7 @@ describe('Authentication Helper', () => {
 	let cacheManager: Cache
 	let jwtService: JwtService
 	let query: Query
-	let schema: Schema
+	let schema: Definition
 	let roles: Roles
 	let authService: AuthService
 	const cacheKey = 'auth:rules:JWT'
@@ -83,7 +83,7 @@ describe('Authentication Helper', () => {
 					},
 				},
 				{
-					provide: Schema,
+					provide: Definition,
 					useValue: {
 						getSchema: jest.fn().mockImplementation((options: { table: string }) => {
 							if (options.table === 'Employee') {
@@ -159,7 +159,7 @@ describe('Authentication Helper', () => {
 		cacheManager = module.get(CACHE_MANAGER)
 		jwtService = module.get(JwtService)
 		query = module.get(Query)
-		schema = module.get(Schema)
+		schema = module.get(Definition)
 		roles = module.get(Roles)
 		authService = module.get(AuthService)
 	})

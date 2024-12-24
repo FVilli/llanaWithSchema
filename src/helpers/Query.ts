@@ -11,16 +11,18 @@ import {
 	FindManyResponseObject,
 	FindOneResponseObject,
 	IsUniqueResponse,
+	Item,
 	ListTablesResponseObject,
+	ListViewsResponseObject,
 } from '../dtos/response.dto'
 import { AuthType } from '../types/auth.types'
 import {
 	DataSourceCreateOneOptions,
+	DataSourceDefinition,
 	DataSourceDeleteOneOptions,
 	DataSourceFindManyOptions,
 	DataSourceFindOneOptions,
 	DataSourceListTablesOptions,
-	DataSourceSchema,
 	DataSourceType,
 	DataSourceUniqueCheckOptions,
 	DataSourceUpdateOneOptions,
@@ -29,23 +31,38 @@ import {
 	WhereOperator,
 } from '../types/datasource.types'
 import { Env } from '../utils/Env'
+import { Definition } from './Definition'
 import { Encryption } from './Encryption'
 import { Logger } from './Logger'
-import { Schema } from './Schema'
 
 @Injectable()
 export class Query {
+	private _defaultSchema = ''
 	constructor(
 		private readonly configService: ConfigService,
 		private readonly encryption: Encryption,
 		private readonly logger: Logger,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 		private readonly mysql: MySQL,
 		private readonly mssql: MSSQL,
 		private readonly postgres: Postgres,
 		private readonly mongo: Mongo,
 		private readonly airtable: Airtable,
 	) {}
+
+	get defaultSchema() {
+		return this._defaultSchema
+	}
+
+	urlParser(url: string): { tableOrView: string; schema: string } {
+		let schema = url.split('.')[0]
+		let tableOrView = url.split('.')[1]
+		if (!tableOrView) {
+			tableOrView = schema
+			schema = this.defaultSchema
+		}
+		return { tableOrView, schema }
+	}
 
 	async perform(
 		action: QueryPerform,
@@ -66,6 +83,7 @@ export class Query {
 		| void
 		| boolean
 		| ListTablesResponseObject
+		| string
 	> {
 		let table_name
 
@@ -81,7 +99,8 @@ export class Query {
 				QueryPerform.UPDATE,
 			].includes(action)
 		) {
-			if (!(options as any).schema?.table) {
+			if (!(options as any).definition?.table) {
+				console.log(options)
 				this.logger.warn(
 					`[Query][${action.toUpperCase()}] Table not defined in schema: ${JSON.stringify(options)}`,
 					x_request_id,
@@ -89,7 +108,7 @@ export class Query {
 				throw new Error('Table not defined')
 			}
 
-			table_name = (options as any).schema.table
+			table_name = (options as any).definition.table
 		}
 
 		try {
@@ -100,7 +119,7 @@ export class Query {
 					const createOptions = options as DataSourceCreateOneOptions
 					createOptions.data = await this.identityOperationCheck(createOptions)
 					result = await this.createOne(createOptions, x_request_id)
-					return await this.schema.pipeResponse(createOptions, result)
+					return await this.definition.pipeResponse(createOptions, result)
 
 				case QueryPerform.FIND_ONE:
 					const findOptions = options as DataSourceFindOneOptions
@@ -109,7 +128,7 @@ export class Query {
 						return null
 					}
 
-					result = await this.schema.pipeResponse(options as DataSourceFindOneOptions, result)
+					result = await this.definition.pipeResponse(options as DataSourceFindOneOptions, result)
 					return result
 
 				case QueryPerform.FIND_MANY:
@@ -117,7 +136,7 @@ export class Query {
 					result = await this.findMany(findManyOptions, x_request_id)
 
 					for (let i = 0; i < result.data.length; i++) {
-						result.data[i] = await this.schema.pipeResponse(findManyOptions, result.data[i])
+						result.data[i] = await this.definition.pipeResponse(findManyOptions, result.data[i])
 					}
 					return result
 
@@ -125,7 +144,7 @@ export class Query {
 					const updateOptions = options as DataSourceUpdateOneOptions
 					updateOptions.data = await this.identityOperationCheck(updateOptions)
 					result = await this.updateOne(updateOptions, x_request_id)
-					return await this.schema.pipeResponse(updateOptions, result)
+					return await this.definition.pipeResponse(updateOptions, result)
 
 				case QueryPerform.DELETE:
 					return await this.deleteOne(options as DataSourceDeleteOneOptions, x_request_id)
@@ -142,8 +161,14 @@ export class Query {
 				case QueryPerform.CHECK_CONNECTION:
 					return await this.checkConnection({ x_request_id })
 
+				// case QueryPerform.DEFAULT_SCHEMA:
+				// 	return await this.getDefaultSchema({ x_request_id })
+
 				case QueryPerform.LIST_TABLES:
 					return await this.listTables(options as DataSourceListTablesOptions, x_request_id)
+
+				case QueryPerform.LIST_VIEWS:
+					return await this.listViews(options as DataSourceListTablesOptions, x_request_id)
 
 				default:
 					this.logger.error(`[Query] Action ${action} not supported`, x_request_id)
@@ -188,7 +213,7 @@ export class Query {
 	 * * Used as part of the setup process
 	 */
 
-	private async createTable(schema: DataSourceSchema, x_request_id: string): Promise<boolean> {
+	private async createTable(schema: DataSourceDefinition, x_request_id: string): Promise<boolean> {
 		switch (this.configService.get<string>('database.type')) {
 			case DataSourceType.MYSQL:
 				return await this.mysql.createTable(schema, x_request_id)
@@ -465,7 +490,7 @@ export class Query {
 		const jwt_config = this.configService.get<any>('auth').find(auth => auth.type === AuthType.JWT)
 
 		if (options.data[jwt_config.table.columns.password]) {
-			if (options.schema.table === jwt_config.table.name) {
+			if (options.definition.table === jwt_config.table.name) {
 				options.data[jwt_config.table.columns.password] = await this.encryption.encrypt(
 					jwt_config.table.password.encryption,
 					options.data[jwt_config.table.columns.password],
@@ -483,16 +508,41 @@ export class Query {
 
 	private async checkConnection(options: { x_request_id?: string }): Promise<boolean> {
 		switch (this.configService.get<string>('database.type')) {
-			case DataSourceType.MYSQL:
-				return await this.mysql.checkDataSource({ x_request_id: options.x_request_id })
+			// case DataSourceType.MYSQL:
+			// 	return await this.mysql.checkDataSource({ x_request_id: options.x_request_id })
 			case DataSourceType.POSTGRES:
 				return await this.postgres.checkConnection({ x_request_id: options.x_request_id })
-			case DataSourceType.MONGODB:
-				return await this.mongo.checkConnection({ x_request_id: options.x_request_id })
-			case DataSourceType.MSSQL:
-				return await this.mssql.checkConnection({ x_request_id: options.x_request_id })
-			case DataSourceType.AIRTABLE:
-				return await this.airtable.checkConnection({ x_request_id: options.x_request_id })
+			// case DataSourceType.MONGODB:
+			// 	return await this.mongo.checkConnection({ x_request_id: options.x_request_id })
+			// case DataSourceType.MSSQL:
+			// 	return await this.mssql.checkConnection({ x_request_id: options.x_request_id })
+			// case DataSourceType.AIRTABLE:
+			// 	return await this.airtable.checkConnection({ x_request_id: options.x_request_id })
+			default:
+				this.logger.error(
+					`[Query] Database type ${this.configService.get<string>('database.type')} not supported yet ${options.x_request_id ?? ''}`,
+				)
+				throw new Error(`Database type ${this.configService.get<string>('database.type')} not supported`)
+		}
+	}
+
+	/**
+	 * Get Default Schema
+	 */
+
+	public async getDefaultSchema(options: { x_request_id?: string }): Promise<string> {
+		switch (this.configService.get<string>('database.type')) {
+			// case DataSourceType.MYSQL:
+			// 	return await this.mysql.checkDataSource({ x_request_id: options.x_request_id })
+			case DataSourceType.POSTGRES:
+				this._defaultSchema = await this.postgres.getDefaultSchema({ x_request_id: options.x_request_id })
+				return this._defaultSchema
+			// case DataSourceType.MONGODB:
+			// 	return await this.mongo.checkConnection({ x_request_id: options.x_request_id })
+			// case DataSourceType.MSSQL:
+			// 	return await this.mssql.checkConnection({ x_request_id: options.x_request_id })
+			// case DataSourceType.AIRTABLE:
+			// 	return await this.airtable.checkConnection({ x_request_id: options.x_request_id })
 			default:
 				this.logger.error(
 					`[Query] Database type ${this.configService.get<string>('database.type')} not supported yet ${options.x_request_id ?? ''}`,
@@ -509,24 +559,24 @@ export class Query {
 		options: DataSourceListTablesOptions,
 		x_request_id?: string,
 	): Promise<ListTablesResponseObject> {
-		let tables: string[]
+		let tables: Item[]
 
 		switch (this.configService.get<string>('database.type')) {
-			case DataSourceType.MYSQL:
-				tables = await this.mysql.listTables({ x_request_id })
-				break
+			// case DataSourceType.MYSQL:
+			// 	tables = await this.mysql.listTables({ x_request_id })
+			// 	break
 			case DataSourceType.POSTGRES:
 				tables = await this.postgres.listTables({ x_request_id })
 				break
-			case DataSourceType.MONGODB:
-				tables = await this.mongo.listTables({ x_request_id })
-				break
-			case DataSourceType.MSSQL:
-				tables = await this.mssql.listTables({ x_request_id })
-				break
-			case DataSourceType.AIRTABLE:
-				tables = await this.airtable.listTables({ x_request_id })
-				break
+			// case DataSourceType.MONGODB:
+			// 	tables = await this.mongo.listTables({ x_request_id })
+			// 	break
+			// case DataSourceType.MSSQL:
+			// 	tables = await this.mssql.listTables({ x_request_id })
+			// 	break
+			// case DataSourceType.AIRTABLE:
+			// 	tables = await this.airtable.listTables({ x_request_id })
+			// 	break
 			default:
 				this.logger.error(
 					`[Query] Database type ${this.configService.get<string>('database.type')} not supported yet`,
@@ -538,15 +588,65 @@ export class Query {
 		let tables_filtered = tables
 
 		if (!options?.include_system) {
-			tables_filtered = tables_filtered.filter(table => !table.startsWith('_llana_'))
+			tables_filtered = tables_filtered.filter(item => !item.name.startsWith('_llana_'))
 		}
 
 		if (!options?.include_known_db_orchestration) {
-			tables_filtered = tables_filtered.filter(table => table !== 'atlas_schema_revisions')
+			tables_filtered = tables_filtered.filter(item => item.name !== 'atlas_schema_revisions')
 		}
 
 		return {
 			tables: tables_filtered,
+			_x_request_id: x_request_id,
+		}
+	}
+
+	/**
+	 * List views in the database
+	 */
+
+	private async listViews(
+		options: DataSourceListTablesOptions,
+		x_request_id?: string,
+	): Promise<ListViewsResponseObject> {
+		let views: Item[]
+
+		switch (this.configService.get<string>('database.type')) {
+			// case DataSourceType.MYSQL:
+			// 	tables = await this.mysql.listTables({ x_request_id })
+			// 	break
+			case DataSourceType.POSTGRES:
+				views = await this.postgres.listViews({ x_request_id })
+				break
+			// case DataSourceType.MONGODB:
+			// 	tables = await this.mongo.listTables({ x_request_id })
+			// 	break
+			// case DataSourceType.MSSQL:
+			// 	tables = await this.mssql.listTables({ x_request_id })
+			// 	break
+			// case DataSourceType.AIRTABLE:
+			// 	tables = await this.airtable.listTables({ x_request_id })
+			// 	break
+			default:
+				this.logger.error(
+					`[Query] Database type ${this.configService.get<string>('database.type')} not supported yet`,
+					x_request_id,
+				)
+				throw new Error(`Database type ${this.configService.get<string>('database.type')} not supported`)
+		}
+
+		let views_filtered = views
+
+		if (!options?.include_system) {
+			views_filtered = views_filtered.filter(item => !item.name.startsWith('_llana_'))
+		}
+
+		if (!options?.include_known_db_orchestration) {
+			views_filtered = views_filtered.filter(item => item.name !== 'atlas_schema_revisions')
+		}
+
+		return {
+			views: views_filtered,
 			_x_request_id: x_request_id,
 		}
 	}
@@ -588,7 +688,7 @@ export class Query {
 			}
 
 			const relationOptions = <DataSourceFindManyOptions>{
-				schema: relation.schema,
+				definition: relation.definition,
 				fields: relation.columns,
 				where: where,
 				limit: 9999,

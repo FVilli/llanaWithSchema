@@ -2,8 +2,8 @@ import { faker } from '@faker-js/faker'
 import { Injectable } from '@nestjs/common'
 
 import { FindOneResponseObject } from '../dtos/response.dto'
+import { Definition } from '../helpers/Definition'
 import { Query } from '../helpers/Query'
-import { Schema } from '../helpers/Schema'
 import { QueryPerform } from '../types/datasource.types'
 
 const table = 'User'
@@ -12,7 +12,7 @@ const table = 'User'
 export class UserTestingService {
 	constructor(
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 	) {}
 
 	mockUser(): any {
@@ -25,19 +25,20 @@ export class UserTestingService {
 		}
 	}
 
-	async getSchema(): Promise<any> {
-		return await this.schema.getSchema({ table })
+	async getDef(item?: string): Promise<any> {
+		if (!item) item = table
+		return await this.definition.getDefinition(item, this.query.defaultSchema, 'testing')
 	}
 
 	async createUser(user: any): Promise<any> {
-		const userSchema = await this.schema.getSchema({ table })
+		const definition = await this.getDef()
 
 		const USER = this.mockUser()
 
 		return (await this.query.perform(
 			QueryPerform.CREATE,
 			{
-				schema: userSchema,
+				definition,
 				data: {
 					...USER,
 					...user,
@@ -48,11 +49,11 @@ export class UserTestingService {
 	}
 
 	async deleteUser(user_id: any): Promise<void> {
-		const userSchema = await this.schema.getSchema({ table })
+		const definition = await this.getDef()
 		await this.query.perform(
 			QueryPerform.DELETE,
 			{
-				schema: userSchema,
+				definition,
 				id: user_id,
 			},
 			'testing',

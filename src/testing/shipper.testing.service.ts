@@ -2,8 +2,8 @@ import { faker } from '@faker-js/faker'
 import { Injectable } from '@nestjs/common'
 
 import { FindOneResponseObject } from '../dtos/response.dto'
+import { Definition } from '../helpers/Definition'
 import { Query } from '../helpers/Query'
-import { Schema } from '../helpers/Schema'
 import { QueryPerform } from '../types/datasource.types'
 
 const table = 'Shipper'
@@ -11,7 +11,7 @@ const table = 'Shipper'
 export class ShipperTestingService {
 	constructor(
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 	) {}
 
 	mockShipper(): any {
@@ -25,19 +25,20 @@ export class ShipperTestingService {
 		}
 	}
 
-	async getSchema(): Promise<any> {
-		return await this.schema.getSchema({ table })
+	async getDef(item?: string): Promise<any> {
+		if (!item) item = table
+		return await this.definition.getDefinition(item, this.query.defaultSchema, 'testing')
 	}
 
 	async createShipper(shipper: any): Promise<any> {
-		const shipperTableSchema = await this.schema.getSchema({ table })
+		const definition = await this.getDef()
 
 		const SHIPPER = this.mockShipper()
 
 		return (await this.query.perform(
 			QueryPerform.CREATE,
 			{
-				schema: shipperTableSchema,
+				definition,
 				data: {
 					...SHIPPER,
 					...shipper,
@@ -48,23 +49,23 @@ export class ShipperTestingService {
 	}
 
 	async getShipper(): Promise<any> {
-		const shipperTableSchema = await this.schema.getSchema({ table })
+		const definition = await this.getDef()
 
 		return (await this.query.perform(
 			QueryPerform.FIND_ONE,
 			{
-				schema: shipperTableSchema,
+				definition,
 			},
 			'testing',
 		)) as FindOneResponseObject
 	}
 
 	async deleteShipper(shipper_id: any): Promise<void> {
-		const shipperTableSchema = await this.schema.getSchema({ table })
+		const definition = await this.getDef()
 		await this.query.perform(
 			QueryPerform.DELETE,
 			{
-				schema: shipperTableSchema,
+				definition,
 				id: shipper_id,
 			},
 			'testing',

@@ -3,9 +3,9 @@ import { BadRequestException, Body, Controller, Get, Headers, Post, Req, Res } f
 import { AuthService } from './app.service.auth'
 import { HeaderParams } from './dtos/requests.dto'
 import { Authentication } from './helpers/Authentication'
+import { Definition } from './helpers/Definition'
 import { Query } from './helpers/Query'
 import { Response } from './helpers/Response'
-import { Schema } from './helpers/Schema'
 import { DataSourceFindOneOptions, QueryPerform, WhereOperator } from './types/datasource.types'
 import { RolePermission } from './types/roles.types'
 
@@ -16,7 +16,7 @@ export class AuthController {
 		private readonly authentication: Authentication,
 		private readonly query: Query,
 		private readonly response: Response,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 	) {}
 
 	/**
@@ -51,6 +51,7 @@ export class AuthController {
 		const table = this.authentication.getIdentityTable()
 		const auth = await this.authentication.auth({
 			table,
+			schema: this.query.defaultSchema,
 			x_request_id,
 			access: RolePermission.READ,
 			headers: req.headers,
@@ -62,11 +63,16 @@ export class AuthController {
 		}
 
 		//return the user's profile
-		const schema = await this.schema.getSchema({ table, x_request_id })
+		const schema = await this.definition.getSchema({
+			tableOrView: table,
+			schema: this.query.defaultSchema,
+			isView: false,
+			x_request_id,
+		})
 		const identity_column = await this.authentication.getIdentityColumn(x_request_id)
 
 		const databaseQuery: DataSourceFindOneOptions = {
-			schema,
+			definition: schema,
 			where: [
 				{
 					column: identity_column,

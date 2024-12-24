@@ -2,12 +2,12 @@ import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/
 import { ConfigService } from '@nestjs/config'
 import { JwtService } from '@nestjs/jwt'
 
+import { Definition } from './helpers/Definition'
 import { Encryption } from './helpers/Encryption'
 import { Logger } from './helpers/Logger'
 import { Query } from './helpers/Query'
-import { Schema } from './helpers/Schema'
 import { Auth, AuthJWT, AuthType } from './types/auth.types'
-import { DataSourceSchema, DataSourceWhere, QueryPerform, WhereOperator } from './types/datasource.types'
+import { DataSourceDefinition, DataSourceWhere, QueryPerform, WhereOperator } from './types/datasource.types'
 
 @Injectable()
 export class AuthService {
@@ -17,7 +17,7 @@ export class AuthService {
 		private readonly jwtService: JwtService,
 		private readonly logger: Logger,
 		private readonly query: Query,
-		private readonly schema: Schema,
+		private readonly definition: Definition,
 	) {}
 
 	async signIn(username: string, pass: string, x_request_id?: string): Promise<{ access_token: string; id: any }> {
@@ -38,9 +38,13 @@ export class AuthService {
 			throw new UnauthorizedException()
 		}
 
-		let schema: DataSourceSchema
+		let definition: DataSourceDefinition
 		try {
-			schema = await this.schema.getSchema({ table: jwtAuthConfig.table.name, x_request_id })
+			definition = await this.definition.getDefinition(
+				jwtAuthConfig.table.name,
+				this.query.defaultSchema,
+				x_request_id,
+			)
 		} catch (e) {
 			this.logger.error(e)
 			throw new UnauthorizedException()
@@ -64,7 +68,7 @@ export class AuthService {
 		const user = await this.query.perform(
 			QueryPerform.FIND_ONE,
 			{
-				schema,
+				definition: definition,
 				where,
 			},
 			x_request_id,
@@ -90,7 +94,7 @@ export class AuthService {
 			throw new UnauthorizedException()
 		}
 
-		const userIdentifier = user[(jwtAuthConfig.table as AuthJWT).identity_column ?? schema.primary_key]
+		const userIdentifier = user[(jwtAuthConfig.table as AuthJWT).identity_column ?? definition.primary_key]
 
 		this.logger.debug(`[Authentication][auth] User ${userIdentifier} authenticated successfully`)
 
